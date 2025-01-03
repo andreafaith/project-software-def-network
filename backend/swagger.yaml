@@ -1,0 +1,518 @@
+openapi: 3.0.0
+info:
+  title: EyeNet API
+  description: API documentation for the EyeNet network monitoring and ML analysis system
+  version: 1.0.0
+  contact:
+    name: EyeNet Support
+servers:
+  - url: http://localhost:3000/api
+    description: Development server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    User:
+      type: object
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        role:
+          type: string
+          enum: [user, admin]
+    
+    NetworkDevice:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [router, switch, access_point, server, workstation, printer, other]
+        manufacturer:
+          type: string
+        model:
+          type: string
+        location:
+          type: object
+          properties:
+            building:
+              type: string
+            floor:
+              type: string
+            room:
+              type: string
+            coordinates:
+              type: object
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+
+    AlertConfig:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        deviceTypes:
+          type: array
+          items:
+            type: string
+        thresholds:
+          type: array
+          items:
+            type: object
+            properties:
+              metric:
+                type: string
+                enum: [cpu_usage, memory_usage, disk_usage, bandwidth_usage, latency, packet_loss, error_rate, uptime, temperature]
+              operator:
+                type: string
+                enum: [gt, lt, gte, lte, eq, neq]
+              value:
+                type: number
+
+    WebSocketMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [device_status, metrics, alert, topology]
+        data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+paths:
+  /auth/register:
+    post:
+      summary: Register a new user
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  tokens:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+
+  /auth/login:
+    post:
+      summary: Login user
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+
+  /network/devices:
+    get:
+      summary: Get all network devices
+      tags: [Network]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+          description: Filter by device type
+        - in: query
+          name: building
+          schema:
+            type: string
+          description: Filter by building
+      responses:
+        '200':
+          description: List of network devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NetworkDevice'
+
+  /network/devices/{deviceId}:
+    get:
+      summary: Get device by ID
+      tags: [Network]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: deviceId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkDevice'
+
+  /ml/predict:
+    post:
+      summary: Run ML prediction on image
+      tags: [ML]
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                options:
+                  type: object
+      responses:
+        '200':
+          description: Prediction results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  predictions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        label:
+                          type: string
+                        confidence:
+                          type: number
+
+  /network/topology:
+    get:
+      summary: Get network topology
+      tags: [Network]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: detail
+          schema:
+            type: string
+            enum: [basic, full]
+          description: Level of detail in topology
+      responses:
+        '200':
+          description: Network topology data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NetworkDevice'
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source:
+                          type: string
+                        target:
+                          type: string
+                        metrics:
+                          type: object
+
+  /network/analytics:
+    get:
+      summary: Get network analytics
+      tags: [Network]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: timeRange
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+          description: Time range for analytics
+        - in: query
+          name: metrics
+          schema:
+            type: array
+            items:
+              type: string
+          description: Specific metrics to analyze
+      responses:
+        '200':
+          description: Network analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: object
+                  trends:
+                    type: array
+                  anomalies:
+                    type: array
+
+  /batch/devices:
+    post:
+      summary: Batch update devices
+      tags: [Batch Operations]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                devices:
+                  type: array
+                  items:
+                    type: string
+                operation:
+                  type: string
+                  enum: [update, delete, restart]
+                config:
+                  type: object
+      responses:
+        '202':
+          description: Batch operation accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId:
+                    type: string
+                  status:
+                    type: string
+
+  /batch/status/{batchId}:
+    get:
+      summary: Get batch operation status
+      tags: [Batch Operations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch operation status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  progress:
+                    type: number
+                  details:
+                    type: object
+
+  /system/health:
+    get:
+      summary: Get system health metrics
+      tags: [System]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: System health information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  metrics:
+                    type: object
+                    properties:
+                      cpu:
+                        type: number
+                      memory:
+                        type: number
+                      disk:
+                        type: object
+                      uptime:
+                        type: number
+
+  /system/logs:
+    get:
+      summary: Get system logs
+      tags: [System]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: level
+          schema:
+            type: string
+            enum: [error, warn, info, debug]
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: System logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp:
+                      type: string
+                    level:
+                      type: string
+                    message:
+                      type: string
+                    metadata:
+                      type: object
+
+  /system/cache:
+    post:
+      summary: Manage system cache
+      tags: [System]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operation:
+                  type: string
+                  enum: [clear, refresh]
+                target:
+                  type: string
+      responses:
+        '200':
+          description: Cache operation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
+  /alerts/config:
+    get:
+      summary: Get alert configurations
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of alert configurations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertConfig'
+    
+    post:
+      summary: Create alert configuration
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertConfig'
+      responses:
+        '201':
+          description: Alert configuration created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertConfig'

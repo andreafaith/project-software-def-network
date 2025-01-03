@@ -1,0 +1,60 @@
+1. Time-based Parameters
+These parameters capture temporal variations in bandwidth usage:
+
+Time of Day: Hourly data to detect peak and off-peak usage times.
+Day of the Week: Patterns can vary between weekdays and weekends.
+Month of the Year: Seasonal trends affecting bandwidth (e.g., holidays or fiscal year-end activities).
+2. User/Department Activity Parameters
+These parameters capture usage patterns for different offices, departments, or individuals:
+
+Department ID: Unique identifier for each department or office.
+Number of Active Users: Total number of users actively connected at a given time.
+Type of Department Activity: Categories like streaming, online meetings, or file downloads.
+Concurrent Applications: Number of simultaneous applications used in the department.
+3. Bandwidth Usage Parameters
+These parameters quantify how bandwidth is consumed:
+
+Current Bandwidth Utilization: Real-time data on bandwidth consumed at any given time.
+Average Bandwidth Usage: Historical average bandwidth usage for a specific time or department.
+Peak Bandwidth Usage: Maximum bandwidth usage recorded during a period.
+Bandwidth Utilization Trends: Rate of increase or decrease in usage over time.
+4. Application Usage Parameters
+Specific to applications consuming bandwidth:
+
+Application Type: Categories like video streaming, video conferencing, file transfer, etc.
+Data Consumed by Application: Total data (in MB/GB) consumed by each application.
+Frequency of Usage: How often a particular application is accessed.
+Allowed Applications: Usage statistics for applications explicitly permitted by the system administrator.
+5. Network Parameters
+Factors affecting overall network performance:
+
+Network Latency: Delays in data transmission due to high bandwidth consumption.
+Packet Loss: Number of packets dropped during transmission, potentially due to congestion.
+Connection Stability: Downtime or fluctuation in the quality of the internet connection.
+6. Predictive Indicators
+Derived or calculated metrics to enhance predictive capabilities:
+
+Bandwidth Forecast Deviation: The difference between actual and forecasted usage in previous cycles.
+Usage Patterns: Historical data that identifies recurring trends (e.g., bandwidth spikes during specific meetings).
+Threshold Exceedance History: Number of times a department exceeded its allocated bandwidth.
+7. User-defined Policies and Rules
+These parameters incorporate administrator-set rules:
+
+Bandwidth Allocation Limit: Predefined bandwidth limits for departments.
+Priority Levels: Specific departments or applications given high or low priority.
+Time-based Restrictions: Policies restricting or enabling certain applications at specific times.
+8. External Factors
+Data from external environments that may impact bandwidth:
+
+Weather Conditions: Can affect internet usage patterns, especially in remote or hybrid work setups.
+Special Events or Holidays: Increased bandwidth usage during events like webinars or holidays.
+Network Upgrades or Downtime: Scheduled maintenance or upgrades affecting usage trends.
+Example Model Features
+Using the parameters, a predictive model might include:
+
+Input Features:
+Time of day, day of the week, active users, application type, current bandwidth utilization, and latency.
+Output Labels (Predictions):
+Bandwidth usage forecast (e.g., in Mbps or GB), department likely to exceed limits, and high-usage applications.
+Techniques
+The model could leverage time-series analysis (e.g., ARIMA, LSTM), classification models for priority recommendations, or regression models to forecast bandwidth requirements. Combining historical data and real-time monitoring ensures accurate predictions and actionable insights.

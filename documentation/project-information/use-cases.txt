@@ -1,0 +1,9 @@
+OpenDaylight API: An open-source SDN (Software Defined Networking) controller that can dynamically manage and prioritize network traffic.
+
+Use Case: Real-time bandwidth control based on predictive analytics.
+pfSense API: Provides tools for network traffic shaping and bandwidth management.
+
+Use Case: Implement rules for bandwidth allocation and traffic prioritization.
+
+MikroTik RouterOS API:
+Use Case: Manage bandwidth allocation, prioritize applications, and monitor usage on MikroTik devices.

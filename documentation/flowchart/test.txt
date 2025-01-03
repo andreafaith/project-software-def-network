@@ -1,0 +1,1 @@
+create a development phase for this application but make sure all things we needed are solid @.  scan the workspace if not make an adjustment add more information etc. 
