@@ -1,185 +1,191 @@
-import { createClient } from 'redis';
+import Redis from 'ioredis';
+import config from '../config/index.js';
 import logger from '../utils/logger.js';
 
 class RedisService {
     constructor() {
         this.client = null;
         this.isConnected = false;
+        this.useFallback = false;
+        this.init();
     }
 
-    async initialize() {
+    init() {
         try {
-            this.client = createClient({
-                url: process.env.REDIS_URL,
-                socket: {
-                    reconnectStrategy: (retries) => {
-                        if (retries > 10) {
-                            return new Error('Redis connection retries exceeded');
-                        }
-                        return Math.min(retries * 100, 3000);
-                    }
-                }
-            });
-
-            // Error handling
-            this.client.on('error', (err) => {
-                logger.error('Redis Client Error:', err);
-                this.isConnected = false;
-            });
-
-            this.client.on('connect', () => {
-                logger.info('Redis Client Connected');
-                this.isConnected = true;
-            });
-
-            await this.client.connect();
+            if (process.env.NODE_ENV === 'test') {
+                this.setupMockClient();
+            } else {
+                this.setupRedisClient();
+            }
         } catch (error) {
             logger.error('Redis initialization error:', error);
+            this.setupFallbackClient();
+        }
+    }
+
+    setupMockClient() {
+        this.client = {
+            on: () => this,
+            get: () => Promise.resolve(null),
+            set: () => Promise.resolve('OK'),
+            del: () => Promise.resolve(1),
+            incr: () => Promise.resolve(1),
+            expire: () => Promise.resolve(1),
+            ttl: () => Promise.resolve(-2),
+            quit: () => Promise.resolve('OK'),
+            ping: () => Promise.resolve('PONG')
+        };
+        this.isConnected = true;
+    }
+
+    setupFallbackClient() {
+        logger.warn('Using in-memory fallback for Redis');
+        this.useFallback = true;
+        this.isConnected = true;
+        this.storage = new Map();
+        this.client = {
+            get: (key) => Promise.resolve(this.storage.get(key) || null),
+            set: (key, value) => {
+                this.storage.set(key, value);
+                return Promise.resolve('OK');
+            },
+            del: (key) => {
+                const existed = this.storage.delete(key);
+                return Promise.resolve(existed ? 1 : 0);
+            },
+            incr: (key) => {
+                const value = (this.storage.get(key) || 0) + 1;
+                this.storage.set(key, value);
+                return Promise.resolve(value);
+            },
+            expire: () => Promise.resolve(1),
+            ttl: () => Promise.resolve(300),
+            quit: () => Promise.resolve('OK'),
+            ping: () => Promise.resolve('PONG')
+        };
+    }
+
+    setupRedisClient() {
+        const options = {
+            retryStrategy: (times) => {
+                const delay = Math.min(times * 50, 2000);
+                return delay;
+            },
+            maxRetriesPerRequest: 3,
+            enableReadyCheck: true,
+            showFriendlyErrorStack: true,
+            lazyConnect: true,
+            connectTimeout: 10000,
+            disconnectTimeout: 2000,
+            commandTimeout: 5000,
+            retryUnfulfilledCommands: true,
+            reconnectOnError: (err) => {
+                const targetError = 'READONLY';
+                if (err.message.includes(targetError)) {
+                    return true;
+                }
+                return false;
+            }
+        };
+
+        // Use Redis URL if available
+        const redisUrl = process.env.REDIS_URL;
+        this.client = redisUrl ? new Redis(redisUrl, options) : new Redis(options);
+
+        this.client.on('connect', () => {
+            this.isConnected = true;
+            logger.info('Redis connected successfully');
+        });
+
+        this.client.on('error', (err) => {
+            logger.error('Redis connection error:', err);
+            if (!this.useFallback) {
+                this.setupFallbackClient();
+            }
+        });
+
+        this.client.on('close', () => {
+            this.isConnected = false;
+            logger.warn('Redis connection closed');
+            if (!this.useFallback) {
+                this.setupFallbackClient();
+            }
+        });
+
+        // Connect to Redis
+        this.client.connect().catch(err => {
+            logger.error('Redis connection failed:', err);
+            this.setupFallbackClient();
+        });
+    }
+
+    async executeCommand(command, ...args) {
+        try {
+            if (this.useFallback || !this.client[command]) {
+                // Use fallback implementation for unknown commands
+                switch (command) {
+                    case 'get':
+                    case 'set':
+                    case 'del':
+                    case 'incr':
+                    case 'expire':
+                    case 'ttl':
+                    case 'ping':
+                        return this.client[command](...args);
+                    default:
+                        logger.warn(`Unsupported Redis command in fallback mode: ${command}`);
+                        return Promise.resolve(null);
+                }
+            }
+            return await this.client[command](...args);
+        } catch (error) {
+            logger.error(`Redis command error (${command}):`, error);
+            if (!this.useFallback) {
+                this.setupFallbackClient();
+                return this.executeCommand(command, ...args);
+            }
             throw error;
         }
     }
 
+    async ping() {
+        return this.executeCommand('ping');
+    }
+
     async get(key) {
-        try {
-            const value = await this.client.get(key);
-            return value ? JSON.parse(value) : null;
-        } catch (error) {
-            logger.error(`Redis get error for key ${key}:`, error);
-            return null;
-        }
+        return this.executeCommand('get', key);
     }
 
-    async set(key, value, options = {}) {
-        try {
-            const stringValue = JSON.stringify(value);
-            if (options.ttl) {
-                await this.client.set(key, stringValue, {
-                    EX: options.ttl
-                });
-            } else {
-                await this.client.set(key, stringValue);
-            }
-            return true;
-        } catch (error) {
-            logger.error(`Redis set error for key ${key}:`, error);
-            return false;
+    async set(key, value, ttl = null) {
+        if (ttl) {
+            return this.executeCommand('set', key, value, 'EX', ttl);
         }
+        return this.executeCommand('set', key, value);
     }
 
-    async delete(key) {
-        try {
-            await this.client.del(key);
-            return true;
-        } catch (error) {
-            logger.error(`Redis delete error for key ${key}:`, error);
-            return false;
-        }
+    async del(key) {
+        return this.executeCommand('del', key);
     }
 
-    async exists(key) {
-        try {
-            return await this.client.exists(key);
-        } catch (error) {
-            logger.error(`Redis exists error for key ${key}:`, error);
-            return false;
-        }
-    }
-
-    async increment(key) {
-        try {
-            return await this.client.incr(key);
-        } catch (error) {
-            logger.error(`Redis increment error for key ${key}:`, error);
-            return null;
-        }
+    async incr(key) {
+        return this.executeCommand('incr', key);
     }
 
     async expire(key, seconds) {
-        try {
-            return await this.client.expire(key, seconds);
-        } catch (error) {
-            logger.error(`Redis expire error for key ${key}:`, error);
-            return false;
+        return this.executeCommand('expire', key, seconds);
+    }
+
+    async ttl(key) {
+        return this.executeCommand('ttl', key);
+    }
+
+    async disconnect() {
+        if (this.client && !this.useFallback) {
+            await this.client.quit();
+            this.isConnected = false;
         }
-    }
-
-    async keys(pattern) {
-        try {
-            return await this.client.keys(pattern);
-        } catch (error) {
-            logger.error(`Redis keys error for pattern ${pattern}:`, error);
-            return [];
-        }
-    }
-
-    async flush() {
-        try {
-            await this.client.flushDb();
-            return true;
-        } catch (error) {
-            logger.error('Redis flush error:', error);
-            return false;
-        }
-    }
-
-    // Cache middleware for Express
-    cacheMiddleware(ttl = 300) { // Default 5 minutes
-        return async (req, res, next) => {
-            if (!this.isConnected) {
-                return next();
-            }
-
-            const key = `cache:${req.method}:${req.originalUrl}`;
-            try {
-                const cachedResponse = await this.get(key);
-                if (cachedResponse) {
-                    return res.json(cachedResponse);
-                }
-
-                // Modify res.json to cache the response
-                const originalJson = res.json;
-                res.json = async (body) => {
-                    await this.set(key, body, { ttl });
-                    res.json = originalJson;
-                    return res.json(body);
-                };
-
-                next();
-            } catch (error) {
-                logger.error('Cache middleware error:', error);
-                next();
-            }
-        };
-    }
-
-    // Rate limiting middleware
-    rateLimiter(options = { window: 60, max: 100 }) {
-        return async (req, res, next) => {
-            if (!this.isConnected) {
-                return next();
-            }
-
-            const key = `ratelimit:${req.ip}`;
-            try {
-                const requests = await this.increment(key);
-                if (requests === 1) {
-                    await this.expire(key, options.window);
-                }
-
-                if (requests > options.max) {
-                    return res.status(429).json({
-                        error: 'Too many requests',
-                        retryAfter: options.window
-                    });
-                }
-
-                next();
-            } catch (error) {
-                logger.error('Rate limiter error:', error);
-                next();
-            }
-        };
     }
 }
 
-export default new RedisService();
+const redisService = new RedisService();
+export default redisService;

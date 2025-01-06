@@ -1,6 +1,6 @@
 import express from 'express';
 import { body, param, validationResult } from 'express-validator';
-import { auth, adminAuth } from '../middleware/auth.js';
+import { adminAuth, verifyToken } from '../middleware/auth.js';
 import ApiKey from '../models/ApiKey.js';
 import logger from '../utils/logger.js';
 
@@ -8,7 +8,7 @@ const router = express.Router();
 
 // Get user's API keys
 router.get('/', 
-    auth,
+    verifyToken,
     async (req, res) => {
         try {
             const keys = await ApiKey.find({ 
@@ -25,7 +25,7 @@ router.get('/',
 
 // Create new API key
 router.post('/',
-    auth,
+    verifyToken,
     [
         body('name').isString().trim().notEmpty(),
         body('type').isIn(['ml', 'api']),
@@ -83,7 +83,7 @@ router.post('/',
 
 // Get API key details
 router.get('/:id',
-    auth,
+    verifyToken,
     async (req, res) => {
         try {
             const key = await ApiKey.findOne({
@@ -105,7 +105,7 @@ router.get('/:id',
 
 // Update API key
 router.patch('/:id',
-    auth,
+    verifyToken,
     [
         body('name').optional().isString().trim().notEmpty(),
         body('status').optional().isIn(['active', 'inactive']),
@@ -150,7 +150,7 @@ router.patch('/:id',
 
 // Revoke API key
 router.delete('/:id',
-    auth,
+    verifyToken,
     async (req, res) => {
         try {
             const key = await ApiKey.findOne({
@@ -177,7 +177,7 @@ router.delete('/:id',
 
 // Admin: List all API keys
 router.get('/admin/all',
-    adminAuth,
+    verifyToken,
     async (req, res) => {
         try {
             const keys = await ApiKey.find()

@@ -4,7 +4,6 @@ const networkPolicySchema = new mongoose.Schema({
     name: {
         type: String,
         required: true,
-        unique: true,
         trim: true
     },
     description: {
@@ -89,10 +88,7 @@ const networkPolicySchema = new mongoose.Schema({
 });
 
 // Indexes
-networkPolicySchema.index({ name: 1 }, { unique: true });
-networkPolicySchema.index({ type: 1, priority: -1 });
-networkPolicySchema.index({ 'scope.deviceTypes': 1 });
-networkPolicySchema.index({ status: 1 });
+networkPolicySchema.index({ name: 1, type: 1, priority: -1, 'scope.deviceTypes': 1, status: 1 });
 
 // Methods
 networkPolicySchema.methods.activate = async function() {
@@ -111,18 +107,18 @@ networkPolicySchema.methods.archive = async function() {
 };
 
 // Statics
-networkPolicySchema.statics.findActive = function() {
-    return this.find({ status: 'active' }).sort({ priority: 1 });
+networkPolicySchema.statics.findActive = async function() {
+    return this.find({ status: 'active' }).sort({ priority: -1 });
 };
 
-networkPolicySchema.statics.findByDevice = function(deviceType, groups = []) {
+networkPolicySchema.statics.findByDevice = async function(deviceType, groups = []) {
     return this.find({
         status: 'active',
         $or: [
             { 'scope.deviceTypes': deviceType },
             { 'scope.deviceGroups': { $in: groups } }
         ]
-    }).sort({ priority: 1 });
+    }).sort({ priority: -1 });
 };
 
 const NetworkPolicy = mongoose.model('NetworkPolicy', networkPolicySchema);

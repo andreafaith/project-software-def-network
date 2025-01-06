@@ -1,6 +1,6 @@
 import NetworkDevice from '../models/NetworkDevice.js';
 import NetworkMetrics from '../models/NetworkMetrics.js';
-import AutoConfigService from './AutoConfigService.js';
+import { AutoConfigService } from './AutoConfigService.js';
 import logger from '../utils/logger.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -8,11 +8,15 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 class SelfHealingService {
+    constructor() {
+        // Initialize any required properties
+    }
+
     /**
      * Detect faults in the network
      * @param {string} deviceId - Device ID to check
      */
-    static async detectFaults(deviceId) {
+    async detectFaults(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -51,7 +55,7 @@ class SelfHealingService {
      * @param {string} deviceId - Device ID
      * @param {Array} faults - Detected faults
      */
-    static async attemptRecovery(deviceId, faults) {
+    async attemptRecovery(deviceId, faults) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -76,7 +80,7 @@ class SelfHealingService {
      * Restore service after a fault
      * @param {string} deviceId - Device ID
      */
-    static async restoreService(deviceId) {
+    async restoreService(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -115,7 +119,7 @@ class SelfHealingService {
      * Run automated health checks
      * @param {string} deviceId - Device ID
      */
-    static async runHealthCheck(deviceId) {
+    async runHealthCheck(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -145,7 +149,7 @@ class SelfHealingService {
      * Check device connectivity
      * @private
      */
-    static async _checkConnectivity(device) {
+    async _checkConnectivity(device) {
         try {
             const { stdout } = await execAsync(`ping -n 1 ${device.ipAddress}`);
             return {
@@ -164,7 +168,7 @@ class SelfHealingService {
      * Check device performance
      * @private
      */
-    static async _checkPerformance(device) {
+    async _checkPerformance(device) {
         const issues = [];
         const metrics = await NetworkMetrics.findOne({ 
             deviceId: device._id 
@@ -213,7 +217,7 @@ class SelfHealingService {
      * Check device configuration
      * @private
      */
-    static async _checkConfiguration(device) {
+    async _checkConfiguration(device) {
         const issues = [];
 
         try {
@@ -255,7 +259,7 @@ class SelfHealingService {
      * Handle specific fault
      * @private
      */
-    static async _handleFault(device, fault) {
+    async _handleFault(device, fault) {
         const result = {
             fault,
             success: false,
@@ -289,7 +293,7 @@ class SelfHealingService {
      * Handle connectivity issues
      * @private
      */
-    static async _handleConnectivityIssue(device) {
+    async _handleConnectivityIssue(device) {
         // Implement interface reset, routing table refresh, etc.
         logger.info(`Handling connectivity issue for device: ${device.name}`);
         return { success: true, action: 'connectivity_recovery' };
@@ -299,7 +303,7 @@ class SelfHealingService {
      * Handle performance issues
      * @private
      */
-    static async _handlePerformanceIssue(device, fault) {
+    async _handlePerformanceIssue(device, fault) {
         // Implement performance optimization, resource reallocation, etc.
         logger.info(`Handling performance issue for device: ${device.name}`);
         return { success: true, action: 'performance_optimization' };
@@ -309,7 +313,7 @@ class SelfHealingService {
      * Handle configuration issues
      * @private
      */
-    static async _handleConfigurationIssue(device) {
+    async _handleConfigurationIssue(device) {
         try {
             // Get last known good configuration
             const lastGoodConfig = await this._getLastConfigBackup(device);
@@ -330,10 +334,11 @@ class SelfHealingService {
      * Extract ping latency from output
      * @private
      */
-    static _extractPingLatency(pingOutput) {
+    _extractPingLatency(pingOutput) {
         const match = pingOutput.match(/time[=<](\d+)ms/);
         return match ? parseInt(match[1]) : null;
     }
 }
 
-export default SelfHealingService;
+const selfHealingService = new SelfHealingService();
+export { selfHealingService as SelfHealingService };

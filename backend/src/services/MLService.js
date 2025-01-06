@@ -565,4 +565,5 @@ class MLService {
     }
 }
 
-export default new MLService();
+const mlService = new MLService();
+export default mlService;

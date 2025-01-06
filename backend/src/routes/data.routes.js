@@ -1,7 +1,8 @@
 import express from 'express';
-import { auth, adminAuth } from '../middleware/auth.js';
+import { adminAuth, verifyToken } from '../middleware/auth.js';
 import DataManager from '../services/DataManager.js';
 import logger from '../utils/logger.js';
+import NetworkDevice from '../models/NetworkDevice.js';
 
 const router = express.Router();
 
@@ -16,14 +17,13 @@ router.post('/devices', adminAuth, async (req, res) => {
     }
 });
 
-router.get('/devices', auth, async (req, res) => {
+router.get('/devices', verifyToken, async (req, res) => {
     try {
-        const { skip, limit, sort, ...query } = req.query;
-        const devices = await DataManager.getDevices(query, {
-            skip: parseInt(skip),
-            limit: parseInt(limit),
-            sort
-        });
+        const { skip, limit, sort } = req.query;
+        const devices = await NetworkDevice.find()
+            .skip(parseInt(skip) || 0)
+            .limit(parseInt(limit) || 0)
+            .sort(sort);
         res.json(devices);
     } catch (error) {
         logger.error('Get devices error:', error);
@@ -52,7 +52,7 @@ router.delete('/devices/:id', adminAuth, async (req, res) => {
 });
 
 // Network Metrics Routes
-router.post('/metrics', auth, async (req, res) => {
+router.post('/metrics', verifyToken, async (req, res) => {
     try {
         const metrics = await DataManager.addMetrics(req.body);
         res.status(201).json(metrics);
@@ -62,7 +62,7 @@ router.post('/metrics', auth, async (req, res) => {
     }
 });
 
-router.get('/metrics', auth, async (req, res) => {
+router.get('/metrics', verifyToken, async (req, res) => {
     try {
         const { skip, limit, sort, startTime, endTime, deviceId } = req.query;
         const query = {};
@@ -86,7 +86,7 @@ router.get('/metrics', auth, async (req, res) => {
     }
 });
 
-router.get('/metrics/aggregate/:deviceId', auth, async (req, res) => {
+router.get('/metrics/aggregate/:deviceId', verifyToken, async (req, res) => {
     try {
         const { startTime, endTime, aggregationType } = req.query;
         const aggregatedMetrics = await DataManager.aggregateMetrics(
@@ -112,7 +112,7 @@ router.post('/alerts/config', adminAuth, async (req, res) => {
     }
 });
 
-router.get('/alerts/config', auth, async (req, res) => {
+router.get('/alerts/config', verifyToken, async (req, res) => {
     try {
         const { skip, limit, sort, ...query } = req.query;
         const alertConfigs = await DataManager.getAlertConfigs(query, {

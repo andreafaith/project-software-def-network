@@ -1,199 +1,118 @@
 import { jest } from '@jest/globals';
-import PredictiveAnalytics from '../../../services/PredictiveAnalytics.js';
-import mongoose from 'mongoose';
+import { PredictiveAnalytics } from '../../../services/PredictiveAnalytics.js';
+import { NetworkMetrics } from '../../../models/NetworkMetrics.js';
+
+jest.mock('../../../models/NetworkMetrics.js');
 
 describe('PredictiveAnalytics Service', () => {
-    describe('Data Processing', () => {
-        it('should process network metrics correctly', async () => {
-            const metrics = {
-                bandwidth: 100,
-                latency: 50,
-                errors: 0,
-                timestamp: new Date()
-            };
+    let predictiveAnalytics;
+    let mockData;
 
-            const result = await PredictiveAnalytics.processMetrics(metrics);
-            expect(result).toHaveProperty('processed');
-            expect(result.processed).toBe(true);
+    beforeEach(() => {
+        jest.clearAllMocks();
+        predictiveAnalytics = new PredictiveAnalytics();
+        mockData = Array.from({ length: 10 }, (_, i) => ({
+            value: i * 10,
+            timestamp: new Date(2023, 0, i + 1)
+        }));
+    });
+
+    describe('Trend Analysis', () => {
+        it('should detect increasing trend', async () => {
+            const result = await predictiveAnalytics.analyzeTrend(mockData);
+            expect(result.direction).toBe('up');
+            expect(result.confidence).toBeGreaterThan(0);
         });
 
-        it('should handle invalid metrics', async () => {
-            const metrics = {
-                bandwidth: 'invalid',
-                latency: -1
-            };
+        it('should detect decreasing trend', async () => {
+            mockData.reverse();
+            const result = await predictiveAnalytics.analyzeTrend(mockData);
+            expect(result.direction).toBe('down');
+            expect(result.confidence).toBeGreaterThan(0);
+        });
 
-            await expect(
-                PredictiveAnalytics.processMetrics(metrics)
-            ).rejects.toThrow();
+        it('should handle flat trend', async () => {
+            const flatData = Array.from({ length: 10 }, () => ({
+                value: 10,
+                timestamp: new Date()
+            }));
+            const result = await predictiveAnalytics.analyzeTrend(flatData);
+            expect(result.direction).toBe('stable');
+        });
+
+        it('should handle insufficient data', async () => {
+            const result = await predictiveAnalytics.analyzeTrend([{ value: 1 }, { value: 2 }]);
+            expect(result.direction).toBe('unknown');
         });
     });
 
     describe('Anomaly Detection', () => {
-        it('should detect bandwidth anomalies', async () => {
-            const metrics = {
-                bandwidth: 1000, // Unusually high
-                latency: 50,
-                timestamp: new Date()
-            };
-
-            const result = await PredictiveAnalytics.detectAnomalies(metrics);
-            expect(result).toHaveProperty('anomalies');
-            expect(result.anomalies).toContain('bandwidth');
+        it('should detect anomalies', async () => {
+            const dataWithAnomaly = [
+                ...Array.from({ length: 9 }, () => ({ value: 10, timestamp: new Date() })),
+                { value: 100, timestamp: new Date() } // Anomaly
+            ];
+            const anomalies = await predictiveAnalytics.detectAnomalies(dataWithAnomaly);
+            expect(anomalies).toHaveLength(1);
+            expect(anomalies[0].value).toBe(100);
+            expect(anomalies[0].severity).toBe('critical');
         });
 
-        it('should detect latency spikes', async () => {
-            const metrics = {
-                bandwidth: 100,
-                latency: 500, // High latency
+        it('should not detect anomalies in normal data', async () => {
+            const normalData = Array.from({ length: 10 }, () => ({
+                value: 10,
                 timestamp: new Date()
-            };
+            }));
+            const anomalies = await predictiveAnalytics.detectAnomalies(normalData);
+            expect(anomalies).toHaveLength(0);
+        });
 
-            const result = await PredictiveAnalytics.detectAnomalies(metrics);
-            expect(result).toHaveProperty('anomalies');
-            expect(result.anomalies).toContain('latency');
+        it('should handle empty data', async () => {
+            const anomalies = await predictiveAnalytics.detectAnomalies([]);
+            expect(anomalies).toHaveLength(0);
         });
     });
 
-    describe('Trend Analysis', () => {
-        it('should analyze trends over time', async () => {
-            const data = [
-                { bandwidth: 100, timestamp: new Date('2025-01-01') },
-                { bandwidth: 110, timestamp: new Date('2025-01-02') }
-            ];
-
-            const result = await PredictiveAnalytics.analyzeTrends(data);
-            expect(result).toHaveProperty('trend');
-            expect(result.trend).toBeGreaterThan(0);
+    describe('Forecasting', () => {
+        it('should generate forecasts', async () => {
+            const forecast = await predictiveAnalytics.generateForecast(mockData);
+            expect(forecast.forecast).toHaveLength(5);
+            expect(forecast.forecast[0]).toHaveProperty('value');
+            expect(forecast.forecast[0]).toHaveProperty('confidence');
+            expect(forecast.confidence).toBeLessThanOrEqual(1);
         });
 
         it('should handle insufficient data', async () => {
-            const data = [
-                { bandwidth: 100, timestamp: new Date() }
-            ];
-
-            await expect(
-                PredictiveAnalytics.analyzeTrends(data)
-            ).rejects.toThrow('Insufficient data');
+            const forecast = await predictiveAnalytics.generateForecast([{ value: 1 }, { value: 2 }]);
+            expect(forecast).toHaveLength(0);
         });
     });
 
-    describe('Prediction Generation', () => {
-        it('should generate future predictions', async () => {
-            const historicalData = [
-                { bandwidth: 100, timestamp: new Date('2025-01-01') },
-                { bandwidth: 110, timestamp: new Date('2025-01-02') }
-            ];
-
-            const predictions = await PredictiveAnalytics.generatePredictions(
-                historicalData,
-                24 // hours
-            );
-
-            expect(predictions).toHaveLength(24);
-            expect(predictions[0]).toHaveProperty('predicted');
-            expect(predictions[0]).toHaveProperty('confidence');
-        });
-
-        it('should include confidence intervals', async () => {
-            const historicalData = [
-                { bandwidth: 100, timestamp: new Date('2025-01-01') },
-                { bandwidth: 110, timestamp: new Date('2025-01-02') }
-            ];
-
-            const predictions = await PredictiveAnalytics.generatePredictions(
-                historicalData,
-                1
-            );
-
-            expect(predictions[0].confidence).toBeGreaterThan(0);
-            expect(predictions[0].confidence).toBeLessThanOrEqual(1);
-        });
-    });
-
-    describe('Model Management', () => {
-        it('should train model with new data', async () => {
-            const trainingData = [
-                { bandwidth: 100, latency: 50, timestamp: new Date('2025-01-01') },
-                { bandwidth: 110, latency: 55, timestamp: new Date('2025-01-02') }
-            ];
-
-            const result = await PredictiveAnalytics.trainModel(trainingData);
-            expect(result).toHaveProperty('trained');
-            expect(result.trained).toBe(true);
-        });
-
-        it('should validate model performance', async () => {
-            const validationData = [
-                { bandwidth: 100, latency: 50, timestamp: new Date('2025-01-01') },
-                { bandwidth: 110, latency: 55, timestamp: new Date('2025-01-02') }
-            ];
-
-            const performance = await PredictiveAnalytics.validateModel(
-                validationData
-            );
-
-            expect(performance).toHaveProperty('accuracy');
-            expect(performance.accuracy).toBeGreaterThan(0);
-        });
-    });
-
-    describe('Alert Generation', () => {
-        it('should generate alerts for anomalies', async () => {
-            const anomaly = {
-                metric: 'bandwidth',
-                value: 1000,
-                threshold: 500,
-                timestamp: new Date()
-            };
-
-            const alert = await PredictiveAnalytics.generateAlert(anomaly);
-            expect(alert).toHaveProperty('type', 'anomaly');
-            expect(alert).toHaveProperty('severity');
-            expect(alert).toHaveProperty('message');
-        });
-
-        it('should prioritize alerts correctly', async () => {
-            const criticalAnomaly = {
-                metric: 'latency',
-                value: 1000,
-                threshold: 100,
-                timestamp: new Date()
-            };
-
-            const alert = await PredictiveAnalytics.generateAlert(criticalAnomaly);
-            expect(alert.severity).toBe('critical');
-        });
-    });
-
-    describe('Performance', () => {
-        it('should process large datasets efficiently', async () => {
-            const largeDataset = Array.from({ length: 1000 }, (_, i) => ({
-                bandwidth: 100 + i,
-                latency: 50 + i / 10,
-                timestamp: new Date(Date.now() + i * 60000)
-            }));
-
-            const startTime = Date.now();
-            await PredictiveAnalytics.processMetrics(largeDataset);
-            const duration = Date.now() - startTime;
-
-            expect(duration).toBeLessThan(5000); // Should complete within 5 seconds
-        });
-
-        it('should handle concurrent requests', async () => {
-            const requests = Array.from({ length: 10 }, () =>
-                PredictiveAnalytics.processMetrics({
+    describe('Metrics Processing', () => {
+        it('should process valid metrics', async () => {
+            const validMetrics = {
+                deviceId: 'test-device',
+                metrics: {
                     bandwidth: 100,
                     latency: 50,
-                    timestamp: new Date()
-                })
-            );
+                    packetLoss: 0.1,
+                    jitter: 5
+                }
+            };
+            const result = await predictiveAnalytics.processMetrics(validMetrics);
+            expect(result.deviceId).toBe(validMetrics.deviceId);
+            expect(result.trends).toBeDefined();
+            expect(result.predictions).toBeDefined();
+            expect(result.anomalies).toBeDefined();
+        });
 
-            const results = await Promise.all(requests);
-            results.forEach(result => {
-                expect(result.processed).toBe(true);
-            });
+        it('should handle invalid metrics', async () => {
+            const invalidMetrics = {
+                deviceId: 'test-device'
+            };
+            await expect(predictiveAnalytics.processMetrics(invalidMetrics))
+                .rejects
+                .toThrow('Invalid metrics data');
         });
     });
 });

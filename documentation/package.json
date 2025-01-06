@@ -1,0 +1,11 @@
+{
+  "name": "eyenet-documentation",
+  "version": "1.0.0",
+  "description": "Documentation tools for EyeNet project",
+  "main": "generatePDF.js",
+  "type": "module",
+  "dependencies": {
+    "md-to-pdf": "^5.2.4",
+    "highlight.js": "^11.11.1"
+  }
+}

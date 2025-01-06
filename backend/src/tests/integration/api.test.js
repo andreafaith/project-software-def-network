@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app from '../../app.js';
+import { app } from '@/index.js';
 import mongoose from 'mongoose';
 import { jest } from '@jest/globals';
 

@@ -1,14 +1,18 @@
 import NetworkDevice from '../models/NetworkDevice.js';
 import NetworkTopology from '../models/NetworkTopology.js';
 import NetworkMetrics from '../models/NetworkMetrics.js';
-import AutoConfigService from './AutoConfigService.js';
-import SelfHealingService from './SelfHealingService.js';
-import PolicyEnforcementService from './PolicyEnforcementService.js';
+import { AutoConfigService } from './AutoConfigService.js';
+import { SelfHealingService } from './SelfHealingService.js';
+import { PolicyEnforcementService } from './PolicyEnforcementService.js';
 import logger from '../utils/logger.js';
 
 class NetworkMonitor {
+    constructor() {
+        // Initialize any required properties
+    }
+
     // Device Discovery
-    static async discoverDevices(subnet) {
+    async discoverDevices(subnet) {
         try {
             logger.info(`Starting network discovery on subnet: ${subnet}`);
             
@@ -51,51 +55,202 @@ class NetworkMonitor {
 
             return savedDevices;
         } catch (error) {
-            logger.error('Device discovery error:', error);
+            logger.error('Error during device discovery:', error);
             throw error;
         }
     }
 
-    // Helper method to get default configuration based on device type
-    static _getDefaultConfig(deviceType) {
-        const defaultConfigs = {
-            router: {
-                interfaces: [{
-                    name: 'GigabitEthernet0/0',
-                    ip: 'dhcp',
-                    subnet: null
-                }],
-                routing: {
-                    protocol: 'static',
-                    networks: []
+    // Network Status
+    async getNetworkStatus() {
+        try {
+            // Get overall network health
+            const devices = await NetworkDevice.find({});
+            const topology = await NetworkTopology.findOne({}).sort({ timestamp: -1 });
+            const recentMetrics = await NetworkMetrics.find({})
+                .sort({ timestamp: -1 })
+                .limit(100);
+
+            // Calculate health scores
+            const deviceHealth = this._calculateDeviceHealth(devices);
+            const topologyHealth = this._calculateTopologyHealth(topology);
+            const performanceHealth = this._calculatePerformanceHealth(recentMetrics);
+
+            // Get active alerts
+            const activeAlerts = await this._getActiveAlerts();
+
+            return {
+                overall: {
+                    status: this._determineOverallStatus(deviceHealth, topologyHealth, performanceHealth),
+                    score: (deviceHealth + topologyHealth + performanceHealth) / 3
                 },
-                security: {
-                    firewallRules: [],
-                    accessLists: []
+                components: {
+                    devices: deviceHealth,
+                    topology: topologyHealth,
+                    performance: performanceHealth
+                },
+                metrics: {
+                    totalDevices: devices.length,
+                    activeDevices: devices.filter(d => d.status === 'active').length,
+                    alertCount: activeAlerts.length
+                },
+                alerts: activeAlerts
+            };
+        } catch (error) {
+            logger.error('Error getting network status:', error);
+            throw new Error('Failed to retrieve network status');
+        }
+    }
+
+    // Helper method to calculate network health
+    _calculateNetworkHealth(deviceMetrics) {
+        if (!deviceMetrics || deviceMetrics.length === 0) {
+            return {
+                status: 'unknown',
+                score: 0,
+                issues: []
+            };
+        }
+
+        const issues = [];
+        let totalScore = 0;
+
+        for (const device of deviceMetrics) {
+            if (device.status === 'down') {
+                issues.push(`Device ${device.name} is down`);
+            }
+
+            if (device.metrics) {
+                const { bandwidth, latency, packetLoss } = device.metrics;
+                
+                // Check bandwidth utilization
+                if (bandwidth > 90) {
+                    issues.push(`High bandwidth utilization on ${device.name}`);
+                }
+
+                // Check latency
+                if (latency > 100) {
+                    issues.push(`High latency on ${device.name}`);
+                }
+
+                // Check packet loss
+                if (packetLoss > 1) {
+                    issues.push(`Packet loss detected on ${device.name}`);
+                }
+
+                // Calculate device score (0-100)
+                const deviceScore = 100 - (
+                    (bandwidth / 100) * 30 + 
+                    (latency / 200) * 40 + 
+                    (packetLoss * 30)
+                );
+                totalScore += deviceScore;
+            }
+        }
+
+        const averageScore = totalScore / deviceMetrics.length;
+        const status = averageScore > 80 ? 'healthy' : 
+                      averageScore > 60 ? 'warning' : 
+                      'critical';
+
+        return {
+            status,
+            score: Math.round(averageScore),
+            issues
+        };
+    }
+
+    // Helper methods for health calculations
+    _calculateDeviceHealth(devices) {
+        if (!devices || devices.length === 0) return 0;
+        const activeDevices = devices.filter(d => d.status === 'active');
+        return (activeDevices.length / devices.length) * 100;
+    }
+
+    _calculateTopologyHealth(topology) {
+        if (!topology) return 0;
+        // Simple topology health calculation
+        return topology.connections.length > 0 ? 100 : 0;
+    }
+
+    _calculatePerformanceHealth(metrics) {
+        if (!metrics || metrics.length === 0) return 0;
+        
+        // Calculate average performance score
+        const scores = metrics.map(m => {
+            const cpuScore = 100 - (m.cpuUsage || 0);
+            const memScore = 100 - (m.memoryUsage || 0);
+            const latencyScore = Math.max(0, 100 - (m.latency || 0) / 100);
+            return (cpuScore + memScore + latencyScore) / 3;
+        });
+
+        return scores.reduce((a, b) => a + b, 0) / scores.length;
+    }
+
+    _determineOverallStatus(deviceHealth, topologyHealth, performanceHealth) {
+        const avgHealth = (deviceHealth + topologyHealth + performanceHealth) / 3;
+        if (avgHealth >= 90) return 'excellent';
+        if (avgHealth >= 75) return 'good';
+        if (avgHealth >= 60) return 'fair';
+        return 'poor';
+    }
+
+    async _getActiveAlerts() {
+        // TODO: Implement actual alert retrieval
+        return [];
+    }
+
+    // Helper method to get default config based on device type
+    _getDefaultConfig(deviceType) {
+        // Default configurations for different device types
+        const configs = {
+            router: {
+                snmp: {
+                    enabled: true,
+                    community: 'public',
+                    version: '2c'
+                },
+                logging: {
+                    level: 'info',
+                    facility: 'local7'
+                },
+                qos: {
+                    enabled: true,
+                    defaultPolicy: 'balanced'
                 }
             },
             switch: {
-                vlans: [{
-                    id: 1,
-                    name: 'default'
-                }],
-                ports: [{
-                    number: 1,
-                    mode: 'access',
-                    vlan: 1
-                }],
-                'spanning-tree': {
+                snmp: {
+                    enabled: true,
+                    community: 'public',
+                    version: '2c'
+                },
+                vlan: {
+                    default: 1,
+                    management: 100
+                },
+                spanning_tree: {
                     mode: 'rapid-pvst',
                     priority: 32768
+                }
+            },
+            firewall: {
+                logging: {
+                    level: 'warning',
+                    facility: 'local6'
+                },
+                default_policy: 'deny',
+                inspection: {
+                    enabled: true,
+                    level: 'moderate'
                 }
             }
         };
 
-        return defaultConfigs[deviceType] || {};
+        return configs[deviceType] || {};
     }
 
     // Topology Mapping
-    static async mapTopology() {
+    async mapTopology() {
         try {
             const devices = await NetworkDevice.find({ status: 'active' });
             const topology = new NetworkTopology({
@@ -123,7 +278,7 @@ class NetworkMonitor {
     }
 
     // Bandwidth Monitoring
-    static async monitorBandwidth(deviceId, interfaceName) {
+    async monitorBandwidth(deviceId, interfaceName) {
         try {
             // TODO: Implement actual bandwidth monitoring
             // This is a placeholder for the actual implementation
@@ -148,7 +303,7 @@ class NetworkMonitor {
     }
 
     // Health Check
-    static async checkDeviceHealth(deviceId) {
+    async checkDeviceHealth(deviceId) {
         try {
             // Use SelfHealingService for comprehensive health check
             const healthStatus = await SelfHealingService.runHealthCheck(deviceId);
@@ -176,7 +331,7 @@ class NetworkMonitor {
     }
 
     // Helper method to identify critical issues
-    static _findCriticalIssues(healthStatus) {
+    _findCriticalIssues(healthStatus) {
         const criticalIssues = [];
 
         // Check connectivity
@@ -215,7 +370,7 @@ class NetworkMonitor {
     }
 
     // Alert Generation
-    static async generateAlert(deviceId, type, severity, message) {
+    async generateAlert(deviceId, type, severity, message) {
         try {
             // TODO: Implement actual alert system
             // This is a placeholder for the actual implementation
@@ -240,7 +395,7 @@ class NetworkMonitor {
     }
 
     // Device Status Tracking
-    static async trackDeviceStatus(deviceId) {
+    async trackDeviceStatus(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -281,7 +436,7 @@ class NetworkMonitor {
     }
 
     // Initialize device monitoring
-    static async initializeDeviceMonitoring(deviceId) {
+    async initializeDeviceMonitoring(deviceId) {
         try {
             // Start policy monitoring
             await PolicyEnforcementService.monitorCompliance(deviceId);
@@ -300,4 +455,5 @@ class NetworkMonitor {
     }
 }
 
-export default NetworkMonitor;
+const networkMonitor = new NetworkMonitor();
+export { networkMonitor as NetworkMonitor };

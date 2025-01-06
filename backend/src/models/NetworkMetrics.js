@@ -1,14 +1,16 @@
 import mongoose from 'mongoose';
 
-const metricDataPoint = {
-    value: {
-        type: Number,
-        required: true,
-        validate: {
-            validator: Number.isFinite,
-            message: '{VALUE} is not a valid metric value'
-        }
-    },
+const metricValueSchema = {
+    type: Number,
+    required: true,
+    validate: {
+        validator: Number.isFinite,
+        message: '{VALUE} is not a valid metric value'
+    }
+};
+
+const metricDataPointSchema = {
+    value: metricValueSchema,
     timestamp: {
         type: Date,
         default: Date.now,
@@ -23,8 +25,7 @@ const metricDataPoint = {
 
 const networkMetricsSchema = new mongoose.Schema({
     deviceId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'NetworkDevice',
+        type: String,
         required: true
     },
     interfaceName: {
@@ -32,127 +33,136 @@ const networkMetricsSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
-    metrics: {
-        bandwidth: {
-            inbound: metricDataPoint,
-            outbound: metricDataPoint,
-            total: metricDataPoint,
-            utilization: metricDataPoint
-        },
-        latency: {
-            ...metricDataPoint,
-            distribution: {
-                min: Number,
-                max: Number,
-                mean: Number,
-                median: Number,
-                percentile95: Number,
-                standardDeviation: Number
-            }
-        },
-        packetLoss: {
-            ...metricDataPoint,
-            details: {
-                totalPackets: Number,
-                lostPackets: Number,
-                errorType: {
-                    type: String,
-                    enum: ['collision', 'congestion', 'corruption', 'unknown']
-                }
-            }
-        },
-        errorRate: {
-            ...metricDataPoint,
-            types: {
-                crc: Number,
-                fragment: Number,
-                collision: Number,
-                other: Number
-            }
-        },
-        retransmissionRate: metricDataPoint,
-        jitter: metricDataPoint,
-        throughput: {
-            ...metricDataPoint,
-            details: {
-                actualBits: Number,
-                goodput: Number,
-                overhead: Number
-            }
-        },
-        availability: {
-            ...metricDataPoint,
-            details: {
-                uptime: Number,
-                downtime: Number,
-                lastDowntime: Date,
-                mtbf: Number, // Mean Time Between Failures
-                mttr: Number  // Mean Time To Recovery
-            }
-        }
+    timestamp: {
+        type: Date,
+        default: Date.now
     },
-    aggregation: {
-        type: String,
-        enum: ['raw', '1min', '5min', '15min', '1hour', '1day'],
-        default: 'raw',
-        required: true
-    },
-    tags: [{
-        type: String,
-        trim: true
-    }],
     metadata: {
+        version: {
+            type: String,
+            required: true,
+            default: '1.0'
+        },
+        collectionMethod: {
+            type: String,
+            required: true,
+            default: 'automated'
+        },
         source: {
             type: String,
             required: true,
-            enum: ['snmp', 'api', 'agent', 'manual']
+            default: 'system'
+        }
+    },
+    metrics: {
+        bandwidth: {
+            inbound: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: 'bps'
+                }
+            },
+            outbound: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: 'bps'
+                }
+            },
+            total: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: 'bps'
+                }
+            },
+            utilization: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: '%'
+                }
+            }
         },
-        reliability: {
-            type: Number,
-            min: 0,
-            max: 1,
-            default: 1
+        latency: {
+            value: metricValueSchema,
+            unit: {
+                type: String,
+                default: 'ms'
+            }
         },
-        collectionMethod: String,
-        processingDelay: Number,
-        version: String
+        packetLoss: {
+            value: metricValueSchema,
+            unit: {
+                type: String,
+                default: '%'
+            }
+        },
+        jitter: {
+            value: metricValueSchema,
+            unit: {
+                type: String,
+                default: 'ms'
+            }
+        },
+        errors: {
+            inbound: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: 'count'
+                }
+            },
+            outbound: {
+                value: metricValueSchema,
+                unit: {
+                    type: String,
+                    default: 'count'
+                }
+            }
+        },
+        retransmission: {
+            value: metricValueSchema,
+            unit: {
+                type: String,
+                default: 'count'
+            }
+        }
     }
 }, {
-    timestamps: true,
-    strict: true
+    timestamps: true
 });
 
-// Indexes for better query performance
-networkMetricsSchema.index({ deviceId: 1, 'metrics.timestamp': 1 });
-networkMetricsSchema.index({ deviceId: 1, interfaceName: 1 });
-networkMetricsSchema.index({ 'metrics.timestamp': 1 });
-networkMetricsSchema.index({ aggregation: 1 });
+networkMetricsSchema.methods.toJSON = function() {
+    const obj = this.toObject();
+    delete obj.__v;
+    return obj;
+};
+
+// Create compound index on deviceId and timestamp
+networkMetricsSchema.index({ deviceId: 1, timestamp: -1 });
 
 // Static method to aggregate metrics
 networkMetricsSchema.statics.aggregateMetrics = async function(deviceId, timeRange, aggregationType) {
     const pipeline = [
-        {
-            $match: {
-                deviceId: mongoose.Types.ObjectId(deviceId),
-                'metrics.timestamp': {
-                    $gte: timeRange.start,
-                    $lte: timeRange.end
-                }
-            }
-        },
+        { $match: { deviceId: deviceId } },
+        { $match: { 'metrics.timestamp': { $gte: timeRange.start, $lte: timeRange.end } } },
         {
             $group: {
-                _id: {
-                    deviceId: '$deviceId',
-                    interfaceName: '$interfaceName'
-                },
-                avgBandwidthIn: { $avg: '$metrics.bandwidth.inbound.value' },
-                avgBandwidthOut: { $avg: '$metrics.bandwidth.outbound.value' },
-                maxBandwidthIn: { $max: '$metrics.bandwidth.inbound.value' },
-                maxBandwidthOut: { $max: '$metrics.bandwidth.outbound.value' },
+                _id: null,
+                avgBandwidth: { $avg: '$metrics.bandwidth.total.value' },
+                maxBandwidth: { $max: '$metrics.bandwidth.total.value' },
                 avgLatency: { $avg: '$metrics.latency.value' },
-                avgPacketLoss: { $avg: '$metrics.packetLoss.value' },
-                avgErrorRate: { $avg: '$metrics.errorRate.value' }
+                maxLatency: { $max: '$metrics.latency.value' },
+                totalErrors: {
+                    $sum: {
+                        $add: [
+                            '$metrics.errors.inbound.value',
+                            '$metrics.errors.outbound.value'
+                        ]
+                    }
+                }
             }
         }
     ];
@@ -160,12 +170,46 @@ networkMetricsSchema.statics.aggregateMetrics = async function(deviceId, timeRan
     return this.aggregate(pipeline);
 };
 
+// Static method to get metrics with options
+networkMetricsSchema.statics.getMetrics = async function(deviceId, options = {}) {
+    const query = { deviceId: deviceId };
+
+    // Apply time range filter if provided
+    if (options.timeRange) {
+        query['metrics.timestamp'] = {
+            $gte: options.timeRange.start,
+            $lte: options.timeRange.end
+        };
+    }
+
+    // Apply metric type filter if provided
+    if (options.metricType) {
+        query[`metrics.${options.metricType}`] = { $exists: true };
+    }
+
+    const metrics = await this.find(query)
+        .sort({ 'metrics.timestamp': -1 })
+        .limit(options.limit || 1000)
+        .lean();
+
+    // Transform metrics into time series format
+    return metrics.map(metric => ({
+        timestamp: metric.metrics.timestamp,
+        value: options.metricType ? 
+            metric.metrics[options.metricType].value :
+            metric.metrics.bandwidth.total.value,
+        type: options.metricType || 'bandwidth'
+    }));
+};
+
 // Method to add metric data point
 networkMetricsSchema.methods.addMetricDataPoint = function(metricType, value) {
-    if (this.metrics[metricType]) {
-        this.metrics[metricType].value = value;
-        this.metrics[metricType].timestamp = new Date();
+    if (!this.metrics[metricType]) {
+        throw new Error(`Invalid metric type: ${metricType}`);
     }
+    
+    this.metrics[metricType].value = value;
+    this.metrics[metricType].timestamp = new Date();
     return this.save();
 };
 
@@ -173,11 +217,8 @@ networkMetricsSchema.methods.addMetricDataPoint = function(metricType, value) {
 networkMetricsSchema.methods.getMetricsInRange = function(startTime, endTime) {
     return this.model('NetworkMetrics').find({
         deviceId: this.deviceId,
-        'metrics.timestamp': {
-            $gte: startTime,
-            $lte: endTime
-        }
-    }).sort({ 'metrics.timestamp': 1 });
+        'metrics.timestamp': { $gte: startTime, $lte: endTime }
+    });
 };
 
 const NetworkMetrics = mongoose.model('NetworkMetrics', networkMetricsSchema);

@@ -8,11 +8,15 @@ import path from 'path';
 const execAsync = promisify(exec);
 
 class AutoConfigService {
+    constructor() {
+        // Initialize any required properties
+    }
+
     /**
      * Discovers network devices using nmap
      * @param {string} subnet - Network subnet to scan (e.g., '192.168.1.0/24')
      */
-    static async discoverDevices(subnet) {
+    async discoverDevices(subnet) {
         try {
             const { stdout } = await execAsync(`nmap -sn ${subnet}`);
             const devices = this._parseNmapOutput(stdout);
@@ -27,7 +31,7 @@ class AutoConfigService {
      * Parse nmap output to extract device information
      * @private
      */
-    static _parseNmapOutput(output) {
+    _parseNmapOutput(output) {
         const devices = [];
         const lines = output.split('\n');
         let currentDevice = {};
@@ -59,49 +63,103 @@ class AutoConfigService {
     }
 
     /**
-     * Deploy configuration to a device
+     * Deploy configuration to a network device
      * @param {string} deviceId - Device ID
-     * @param {Object} config - Configuration to deploy
+     * @param {object} config - Configuration object
      */
-    static async deployConfig(deviceId, config) {
+    async deployConfig(deviceId, config) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
                 throw new Error('Device not found');
             }
 
-            // Save configuration backup
-            await this.backupConfig(deviceId);
+            // Save configuration template
+            const configPath = path.join(process.cwd(), 'configs', `${deviceId}.json`);
+            await writeFile(configPath, JSON.stringify(config, null, 2));
 
             // Apply configuration based on device type
-            switch (device.type) {
-                case 'router':
-                    await this._configureRouter(device, config);
-                    break;
-                case 'switch':
-                    await this._configureSwitch(device, config);
-                    break;
-                default:
-                    throw new Error(`Unsupported device type: ${device.type}`);
-            }
+            await this._applyConfig(device, config);
 
             // Update device status
+            device.status = 'configured';
             device.lastConfigured = new Date();
-            device.configStatus = 'configured';
             await device.save();
 
+            logger.info(`Configuration deployed successfully to device ${device.name}`);
             return { success: true, message: 'Configuration deployed successfully' };
         } catch (error) {
-            logger.error('Configuration deployment error:', error);
+            logger.error(`Configuration deployment failed for device ${deviceId}:`, error);
             throw new Error('Configuration deployment failed');
         }
+    }
+
+    /**
+     * Apply configuration to a device
+     * @private
+     */
+    async _applyConfig(device, config) {
+        // TODO: Implement actual device configuration
+        // This is a placeholder for the actual implementation
+        logger.info(`Applying configuration to device ${device.name}`);
+        
+        // Simulate configuration application
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        return true;
+    }
+
+    /**
+     * Validate device configuration
+     * @param {string} deviceId - Device ID
+     */
+    async validateConfig(deviceId) {
+        try {
+            const device = await NetworkDevice.findById(deviceId);
+            if (!device) {
+                throw new Error('Device not found');
+            }
+
+            // Read current configuration
+            const configPath = path.join(process.cwd(), 'configs', `${deviceId}.json`);
+            const config = JSON.parse(await readFile(configPath, 'utf8'));
+
+            // Validate configuration
+            const validationResult = this._validateConfigFormat(config);
+            if (!validationResult.valid) {
+                throw new Error(`Invalid configuration: ${validationResult.message}`);
+            }
+
+            return { success: true, message: 'Configuration is valid' };
+        } catch (error) {
+            logger.error(`Configuration validation failed for device ${deviceId}:`, error);
+            throw new Error('Configuration validation failed');
+        }
+    }
+
+    /**
+     * Validate configuration format
+     * @private
+     */
+    _validateConfigFormat(config) {
+        // TODO: Implement actual configuration validation
+        // This is a placeholder for the actual implementation
+        
+        const requiredFields = ['name', 'type', 'settings'];
+        for (const field of requiredFields) {
+            if (!(field in config)) {
+                return { valid: false, message: `Missing required field: ${field}` };
+            }
+        }
+
+        return { valid: true };
     }
 
     /**
      * Backup device configuration
      * @param {string} deviceId - Device ID
      */
-    static async backupConfig(deviceId) {
+    async backupConfig(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -126,82 +184,10 @@ class AutoConfigService {
     }
 
     /**
-     * Validate configuration
-     * @param {Object} config - Configuration to validate
-     * @param {string} deviceType - Type of device
-     */
-    static validateConfig(config, deviceType) {
-        // Basic validation rules for different device types
-        const validationRules = {
-            router: {
-                required: ['interfaces', 'routing', 'security'],
-                interfaces: ['name', 'ip', 'subnet'],
-                routing: ['protocol', 'networks'],
-                security: ['firewallRules', 'accessLists']
-            },
-            switch: {
-                required: ['vlans', 'ports', 'spanning-tree'],
-                vlans: ['id', 'name'],
-                ports: ['number', 'mode', 'vlan'],
-                'spanning-tree': ['mode', 'priority']
-            }
-        };
-
-        const rules = validationRules[deviceType];
-        if (!rules) {
-            throw new Error(`No validation rules for device type: ${deviceType}`);
-        }
-
-        // Check required sections
-        for (const section of rules.required) {
-            if (!config[section]) {
-                throw new Error(`Missing required section: ${section}`);
-            }
-        }
-
-        // Validate section contents
-        for (const [section, fields] of Object.entries(rules)) {
-            if (Array.isArray(fields) && config[section]) {
-                for (const item of config[section]) {
-                    for (const field of fields) {
-                        if (!item[field]) {
-                            throw new Error(`Missing required field ${field} in ${section}`);
-                        }
-                    }
-                }
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Configure a router device
-     * @private
-     */
-    static async _configureRouter(device, config) {
-        // Implement router-specific configuration logic
-        // This would typically use SSH or SNMP to configure the device
-        logger.info(`Configuring router: ${device.name}`);
-        // Implementation details would go here
-    }
-
-    /**
-     * Configure a switch device
-     * @private
-     */
-    static async _configureSwitch(device, config) {
-        // Implement switch-specific configuration logic
-        // This would typically use SSH or SNMP to configure the device
-        logger.info(`Configuring switch: ${device.name}`);
-        // Implementation details would go here
-    }
-
-    /**
      * Get current configuration from device
      * @private
      */
-    static async _getDeviceConfig(device) {
+    async _getDeviceConfig(device) {
         // Implement device-specific configuration retrieval
         // This would typically use SSH or SNMP to get the config
         logger.info(`Getting configuration from device: ${device.name}`);
@@ -210,4 +196,5 @@ class AutoConfigService {
     }
 }
 
-export default AutoConfigService;
+const autoConfigService = new AutoConfigService();
+export { autoConfigService as AutoConfigService };

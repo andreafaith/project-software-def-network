@@ -33,8 +33,7 @@ const networkDeviceSchema = new mongoose.Schema({
     name: {
         type: String,
         required: true,
-        trim: true,
-        index: true
+        trim: true
     },
     type: {
         type: String,
@@ -99,10 +98,14 @@ const networkDeviceSchema = new mongoose.Schema({
 });
 
 // Indexes for better query performance
-networkDeviceSchema.index({ type: 1 });
-networkDeviceSchema.index({ status: 1 });
-networkDeviceSchema.index({ 'interfaces.ipAddress': 1 });
-networkDeviceSchema.index({ 'location.building': 1, 'location.floor': 1 });
+networkDeviceSchema.index({
+    name: 1,
+    type: 1,
+    status: 1,
+    'interfaces.ipAddress': 1,
+    'location.building': 1,
+    'location.floor': 1
+});
 
 // Virtual for device age
 networkDeviceSchema.virtual('deviceAge').get(function() {

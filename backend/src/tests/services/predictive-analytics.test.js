@@ -1,100 +1,138 @@
-import PredictiveAnalytics from '../../services/PredictiveAnalytics.js';
-import DiscordReporter from '../../services/DiscordReporter.js';
+import { jest } from '@jest/globals';
+import { PredictiveAnalytics } from '../../services/PredictiveAnalytics.js';
+import NetworkMetrics from '../../models/NetworkMetrics.js';
+
+// Mock NetworkMetrics
+jest.mock('../../models/NetworkMetrics.js', () => ({
+    __esModule: true,
+    default: {
+        find: jest.fn(),
+        aggregate: jest.fn()
+    }
+}));
 
 describe('PredictiveAnalytics Service', () => {
+    let predictiveAnalytics;
+
     beforeEach(() => {
-        // Reset any mocks or test data
+        predictiveAnalytics = new PredictiveAnalytics();
+        jest.clearAllMocks();
     });
 
-    test('should process metrics data successfully', async () => {
-        const testMetrics = {
-            deviceId: 'test-device-1',
-            metrics: {
-                cpu: 50,
-                memory: 70,
-                network: 30
-            },
-            timestamp: new Date()
-        };
+    describe('Trend Analysis', () => {
+        it('should detect increasing trend', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 20 },
+                { timestamp: new Date('2025-01-03'), value: 30 }
+            ];
+            const trend = await predictiveAnalytics.analyzeTrend(data);
+            expect(trend.direction).toBe('increasing');
+            expect(trend.confidence).toBeGreaterThan(0.5);
+        });
 
-        const result = await PredictiveAnalytics.processMetrics(testMetrics);
-        expect(result).toBeDefined();
-        expect(result.processed).toBe(true);
+        it('should detect decreasing trend', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 30 },
+                { timestamp: new Date('2025-01-02'), value: 20 },
+                { timestamp: new Date('2025-01-03'), value: 10 }
+            ];
+            const trend = await predictiveAnalytics.analyzeTrend(data);
+            expect(trend.direction).toBe('decreasing');
+            expect(trend.confidence).toBeGreaterThan(0.5);
+        });
+
+        it('should handle flat trend', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 10 },
+                { timestamp: new Date('2025-01-03'), value: 10 }
+            ];
+            const trend = await predictiveAnalytics.analyzeTrend(data);
+            expect(trend.direction).toBe('stable');
+            expect(trend.confidence).toBeGreaterThan(0.5);
+        });
     });
 
-    test('should detect anomalies in metrics', async () => {
-        const anomalousMetrics = {
-            deviceId: 'test-device-1',
-            metrics: {
-                cpu: 95, // High CPU usage
-                memory: 90, // High memory usage
-                network: 20
-            },
-            timestamp: new Date()
-        };
+    describe('Anomaly Detection', () => {
+        it('should detect anomalies', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 12 },
+                { timestamp: new Date('2025-01-03'), value: 50 }, // Anomaly
+                { timestamp: new Date('2025-01-04'), value: 11 }
+            ];
+            const anomalies = await predictiveAnalytics.detectAnomalies(data);
+            expect(anomalies.length).toBe(1);
+            expect(anomalies[0].timestamp).toEqual(new Date('2025-01-03'));
+        });
 
-        const result = await PredictiveAnalytics.detectAnomalies(anomalousMetrics);
-        expect(result.anomalies).toContain('cpu');
-        expect(result.anomalies).toContain('memory');
+        it('should not detect anomalies in normal data', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 12 },
+                { timestamp: new Date('2025-01-03'), value: 11 },
+                { timestamp: new Date('2025-01-04'), value: 13 }
+            ];
+            const anomalies = await predictiveAnalytics.detectAnomalies(data);
+            expect(anomalies.length).toBe(0);
+        });
+
+        it('should handle empty data', async () => {
+            const anomalies = await predictiveAnalytics.detectAnomalies([]);
+            expect(anomalies.length).toBe(0);
+        });
     });
 
-    test('should generate accurate predictions', async () => {
-        const historicalData = [
-            {
-                metrics: { cpu: 50, memory: 60 },
-                timestamp: new Date('2025-01-01T00:00:00')
-            },
-            {
-                metrics: { cpu: 55, memory: 65 },
-                timestamp: new Date('2025-01-01T01:00:00')
-            },
-            {
-                metrics: { cpu: 60, memory: 70 },
-                timestamp: new Date('2025-01-01T02:00:00')
-            }
-        ];
+    describe('Forecasting', () => {
+        it('should generate forecasts', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 20 },
+                { timestamp: new Date('2025-01-03'), value: 30 }
+            ];
+            const forecast = await predictiveAnalytics.generateForecast(data, 2);
+            expect(forecast.length).toBe(2);
+            expect(forecast[0].value).toBeGreaterThan(30);
+        });
 
-        const predictions = await PredictiveAnalytics.generatePredictions(historicalData);
-        expect(predictions).toBeDefined();
-        expect(predictions.length).toBeGreaterThan(0);
-        expect(predictions[0]).toHaveProperty('predicted');
-        expect(predictions[0]).toHaveProperty('confidence');
+        it('should maintain trend direction in forecasts', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 20 },
+                { timestamp: new Date('2025-01-03'), value: 30 }
+            ];
+            const forecast = await predictiveAnalytics.generateForecast(data, 2);
+            expect(forecast[1].value).toBeGreaterThan(forecast[0].value);
+        });
+
+        it('should handle insufficient data', async () => {
+            const data = [{ timestamp: new Date('2025-01-01'), value: 10 }];
+            const forecast = await predictiveAnalytics.generateForecast(data, 2);
+            expect(forecast.length).toBe(0);
+        });
     });
 
-    test('should handle invalid input data', async () => {
-        const invalidMetrics = {
-            deviceId: 'test-device-1',
-            metrics: {
-                cpu: 'invalid',
-                memory: -50,
-                network: null
-            }
-        };
+    describe('Pattern Recognition', () => {
+        it('should detect patterns', async () => {
+            const data = [
+                { timestamp: new Date('2025-01-01'), value: 10 },
+                { timestamp: new Date('2025-01-02'), value: 20 },
+                { timestamp: new Date('2025-01-03'), value: 10 },
+                { timestamp: new Date('2025-01-04'), value: 20 }
+            ];
+            const patterns = await predictiveAnalytics.detectPatterns(data);
+            expect(patterns.length).toBeGreaterThan(0);
+            expect(patterns[0].type).toBe('cyclic');
+        });
 
-        await expect(
-            PredictiveAnalytics.processMetrics(invalidMetrics)
-        ).rejects.toThrow();
-    });
-
-    test('should calculate trend analysis correctly', async () => {
-        const trendData = [
-            {
-                metrics: { cpu: 50, memory: 60 },
-                timestamp: new Date('2025-01-01T00:00:00')
-            },
-            {
-                metrics: { cpu: 55, memory: 65 },
-                timestamp: new Date('2025-01-01T01:00:00')
-            },
-            {
-                metrics: { cpu: 60, memory: 70 },
-                timestamp: new Date('2025-01-01T02:00:00')
-            }
-        ];
-
-        const trends = await PredictiveAnalytics.analyzeTrends(trendData);
-        expect(trends).toBeDefined();
-        expect(trends.cpu.trend).toBeGreaterThan(0);
-        expect(trends.memory.trend).toBeGreaterThan(0);
+        it('should not detect patterns in random data', async () => {
+            const data = Array.from({ length: 10 }, (_, i) => ({
+                timestamp: new Date(`2025-01-${i + 1}`),
+                value: Math.random() * 100
+            }));
+            const patterns = await predictiveAnalytics.detectPatterns(data);
+            expect(patterns.length).toBe(0);
+        });
     });
 });

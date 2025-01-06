@@ -1,6 +1,10 @@
 import express from 'express';
-import { auth, adminAuth } from '../middleware/auth.js';
-import NetworkMonitor from '../services/NetworkMonitor.js';
+import auth, { adminAuth } from '../middleware/auth.js';
+import { sqlInjectionPrevention } from '../middleware/sqlInjectionPrevention.js';
+import { xssPrevention } from '../middleware/xssPrevention.js';
+import { fileUploadValidation } from '../middleware/fileUploadValidation.js';
+import { apiRateLimiter } from '../middleware/rateLimiter.js';
+import { NetworkMonitor } from '../services/NetworkMonitor.js';
 import NetworkDevice from '../models/NetworkDevice.js';
 import NetworkTopology from '../models/NetworkTopology.js';
 import NetworkMetrics from '../models/NetworkMetrics.js';
@@ -8,135 +12,137 @@ import logger from '../utils/logger.js';
 
 const router = express.Router();
 
-// Device Discovery
+// Input validation middleware
+const validateJsonInput = (req, res, next) => {
+    if (req.method !== 'GET' && !req.is('application/json')) {
+        return res.status(400).json({ 
+          error: 'Invalid content type',
+          message: 'Content-Type must be application/json'
+        });
+    }
+    
+    try {
+        if (req.body && Object.keys(req.body).length > 0) {
+            JSON.parse(JSON.stringify(req.body));
+        }
+        next();
+    } catch (error) {
+        res.status(400).json({ 
+          error: 'Invalid request',
+          message: 'Malformed JSON in request body'
+        });
+    }
+};
+
+// Apply security middleware to all routes
+router.use(apiRateLimiter);
+router.use(validateJsonInput);
+router.use(sqlInjectionPrevention);
+router.use(xssPrevention);
+
+// Protected routes
+router.use(auth.verifyToken);
+
+// Network status routes
+router.get('/status', async (req, res) => {
+    try {
+        const status = await NetworkMonitor.getNetworkStatus();
+        res.json(status);
+    } catch (error) {
+        logger.error('Error getting network status:', error);
+        res.status(500).json({ 
+          error: 'Server error',
+          message: 'Failed to get network status'
+        });
+    }
+});
+
+// Network device routes
+router.get('/device/:id', async (req, res) => {
+    try {
+        const device = await NetworkDevice.findById(req.params.id);
+        if (!device) {
+            return res.status(404).json({
+              error: 'Not found',
+              message: 'Device not found'
+            });
+        }
+        res.json(device);
+    } catch (error) {
+        logger.error('Error getting device:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to get device information'
+        });
+    }
+});
+
+// Network topology routes
+router.get('/topology', async (req, res) => {
+    try {
+        const topology = await NetworkTopology.find();
+        res.json(topology);
+    } catch (error) {
+        logger.error('Error getting topology:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to get network topology'
+        });
+    }
+});
+
+// Network metrics routes
+router.get('/metrics/:id', async (req, res) => {
+    try {
+        const metrics = await NetworkMetrics.findById(req.params.id);
+        if (!metrics) {
+            return res.status(404).json({
+              error: 'Not found',
+              message: 'Metrics not found'
+            });
+        }
+        res.json(metrics);
+    } catch (error) {
+        logger.error('Error getting metrics:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to get network metrics'
+        });
+    }
+});
+
+// Network discovery route (admin only)
 router.post('/discover', adminAuth, async (req, res) => {
     try {
-        const { subnet } = req.body;
-        const devices = await NetworkMonitor.discoverDevices(subnet);
-        res.json(devices);
+        const discoveryResult = await NetworkMonitor.discoverDevices();
+        res.json(discoveryResult);
     } catch (error) {
-        logger.error('Device discovery error:', error);
-        res.status(500).json({ error: 'Device discovery failed' });
+        logger.error('Error during network discovery:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to perform network discovery'
+        });
     }
 });
 
-// Get all devices
-router.get('/devices', auth, async (req, res) => {
+// Network configuration upload (admin only)
+router.post('/config/upload', adminAuth, fileUploadValidation, async (req, res) => {
     try {
-        const devices = await NetworkDevice.find();
-        res.json(devices);
-    } catch (error) {
-        logger.error('Get devices error:', error);
-        res.status(500).json({ error: 'Failed to retrieve devices' });
-    }
-});
-
-// Topology Mapping
-router.post('/topology/map', adminAuth, async (req, res) => {
-    try {
-        const topology = await NetworkMonitor.mapTopology();
-        res.json(topology);
-    } catch (error) {
-        logger.error('Topology mapping error:', error);
-        res.status(500).json({ error: 'Topology mapping failed' });
-    }
-});
-
-// Get current topology
-router.get('/topology', auth, async (req, res) => {
-    try {
-        const topology = await NetworkTopology.findOne()
-            .sort({ createdAt: -1 })
-            .populate('connections.sourceDevice')
-            .populate('connections.targetDevice');
-        res.json(topology);
-    } catch (error) {
-        logger.error('Get topology error:', error);
-        res.status(500).json({ error: 'Failed to retrieve topology' });
-    }
-});
-
-// Bandwidth Monitoring
-router.post('/metrics/bandwidth/:deviceId', auth, async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const { interfaceName } = req.body;
-        const metrics = await NetworkMonitor.monitorBandwidth(deviceId, interfaceName);
-        res.json(metrics);
-    } catch (error) {
-        logger.error('Bandwidth monitoring error:', error);
-        res.status(500).json({ error: 'Bandwidth monitoring failed' });
-    }
-});
-
-// Get device metrics
-router.get('/metrics/:deviceId', auth, async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const { startTime, endTime } = req.query;
+        if (!req.files || !req.files.config) {
+            return res.status(400).json({
+              error: 'Invalid request',
+              message: 'No configuration file uploaded'
+            });
+        }
         
-        const metrics = await NetworkMetrics.find({
-            deviceId,
-            'metrics.timestamp': {
-                $gte: new Date(startTime),
-                $lte: new Date(endTime)
-            }
-        }).sort({ 'metrics.timestamp': 1 });
-        
-        res.json(metrics);
+        const result = await NetworkMonitor.processConfigFile(req.files.config);
+        res.json(result);
     } catch (error) {
-        logger.error('Get metrics error:', error);
-        res.status(500).json({ error: 'Failed to retrieve metrics' });
-    }
-});
-
-// Health Check
-router.get('/health/:deviceId', auth, async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const health = await NetworkMonitor.checkDeviceHealth(deviceId);
-        res.json(health);
-    } catch (error) {
-        logger.error('Health check error:', error);
-        res.status(500).json({ error: 'Health check failed' });
-    }
-});
-
-// Device Status
-router.get('/status/:deviceId', auth, async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const status = await NetworkMonitor.trackDeviceStatus(deviceId);
-        res.json({ status });
-    } catch (error) {
-        logger.error('Status check error:', error);
-        res.status(500).json({ error: 'Status check failed' });
-    }
-});
-
-// Bulk Health Check
-router.post('/health/bulk', auth, async (req, res) => {
-    try {
-        const { deviceIds } = req.body;
-        const healthResults = await Promise.all(
-            deviceIds.map(id => NetworkMonitor.checkDeviceHealth(id))
-        );
-        res.json(healthResults);
-    } catch (error) {
-        logger.error('Bulk health check error:', error);
-        res.status(500).json({ error: 'Bulk health check failed' });
-    }
-});
-
-// Generate Alert
-router.post('/alert', auth, async (req, res) => {
-    try {
-        const { deviceId, type, severity, message } = req.body;
-        const alert = await NetworkMonitor.generateAlert(deviceId, type, severity, message);
-        res.json(alert);
-    } catch (error) {
-        logger.error('Alert generation error:', error);
-        res.status(500).json({ error: 'Alert generation failed' });
+        logger.error('Error processing config file:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to process configuration file'
+        });
     }
 });
 

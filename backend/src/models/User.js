@@ -16,13 +16,11 @@ const userSchema = new mongoose.Schema({
     username: {
         type: String,
         required: true,
-        unique: true,
         trim: true
     },
     email: {
         type: String,
         required: true,
-        unique: true,
         trim: true,
         lowercase: true
     },
@@ -61,6 +59,12 @@ const userSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+// Indexes
+userSchema.index({ username: 1 }, { unique: true });
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ 'oauth.provider': 1, 'oauth.id': 1 });
+userSchema.index({ status: 1 });
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {

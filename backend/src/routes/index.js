@@ -7,6 +7,7 @@ import oauthRoutes from './oauth.routes.js';
 import dataRoutes from './data.routes.js';
 import analyticsRoutes from './analytics.routes.js';
 import apikeyRoutes from './apikey.routes.js';
+import predictiveRoutes from './predictive.routes.js';
 
 const router = express.Router();
 
@@ -18,5 +19,6 @@ router.use('/oauth', oauthRoutes);
 router.use('/data', dataRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/apikeys', apikeyRoutes);
+router.use('/predictive', predictiveRoutes);
 
 export default router;

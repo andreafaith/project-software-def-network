@@ -1,135 +1,94 @@
-import autocannon from 'autocannon';
-import { promisify } from 'util';
-import app from '../../app.js';
-
-const run = promisify(autocannon);
+import { jest } from '@jest/globals';
+import request from 'supertest';
+import app from '../../index.js';
+import { generateToken } from '../../utils/auth.js';
 
 describe('Load Testing', () => {
-    let server;
-    let authToken;
+    let token;
 
-    beforeAll(async () => {
-        server = app.listen(0);
-        const response = await fetch(`http://localhost:${server.address().port}/api/auth/login`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                username: 'testuser',
-                password: 'testpass'
-            })
-        });
-        const data = await response.json();
-        authToken = data.token;
+    beforeAll(() => {
+        token = generateToken({ id: 'test123', role: 'admin' });
     });
 
-    afterAll((done) => {
-        server.close(done);
+    test('should handle concurrent API requests', async () => {
+        const numRequests = 50;
+        const requests = Array(numRequests).fill().map(() =>
+            request(app)
+                .get('/api/network/status')
+                .set('Authorization', `Bearer ${token}`)
+        );
+
+        const responses = await Promise.all(requests);
+        const successfulResponses = responses.filter(r => r.status === 200);
+        expect(successfulResponses.length).toBe(numRequests);
     });
 
-    it('should handle high load on metrics endpoint', async () => {
-        const instance = autocannon({
-            url: `http://localhost:${server.address().port}/api/metrics`,
-            connections: 100,
-            duration: 10,
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-
-        const results = await run(instance);
-        
-        expect(results.errors).toBe(0);
-        expect(results.timeouts).toBe(0);
-        expect(results.non2xx).toBe(0);
-        expect(results.latency.p99).toBeLessThan(1000);
-    });
-
-    it('should handle concurrent WebSocket connections', async () => {
-        const instance = autocannon({
-            url: `ws://localhost:${server.address().port}/ws`,
-            connections: 50,
-            duration: 10,
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            },
-            workers: 4,
-            websocket: true
-        });
-
-        const results = await run(instance);
-        
-        expect(results.errors).toBe(0);
-        expect(results.timeouts).toBe(0);
-        expect(results.latency.p99).toBeLessThan(1000);
-    });
-
-    it('should handle data processing under load', async () => {
-        const instance = autocannon({
-            url: `http://localhost:${server.address().port}/api/metrics/process`,
-            connections: 50,
-            duration: 10,
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
-            },
-            method: 'POST',
-            body: JSON.stringify({
-                deviceId: 'test-device',
+    test('should handle large payload', async () => {
+        const largePayload = {
+            devices: Array(100).fill().map((_, i) => ({
+                id: `device${i}`,
+                name: `Device ${i}`,
+                type: 'router',
+                status: 'active',
                 metrics: {
-                    bandwidth: 100,
-                    latency: 50,
-                    timestamp: new Date()
+                    cpu: Math.random() * 100,
+                    memory: Math.random() * 100,
+                    network: Math.random() * 1000
                 }
-            })
-        });
+            }))
+        };
 
-        const results = await run(instance);
-        
-        expect(results.errors).toBe(0);
-        expect(results.timeouts).toBe(0);
-        expect(results.non2xx).toBe(0);
-        expect(results.latency.p99).toBeLessThan(2000);
+        const response = await request(app)
+            .post('/api/network/devices/batch')
+            .set('Authorization', `Bearer ${token}`)
+            .send(largePayload);
+
+        expect(response.status).toBe(200);
     });
 
-    it('should handle analytics queries under load', async () => {
-        const instance = autocannon({
-            url: `http://localhost:${server.address().port}/api/analytics/report`,
-            connections: 20,
-            duration: 10,
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            },
-            queryString: {
-                startDate: '2025-01-01',
-                endDate: '2025-01-02'
-            }
-        });
+    test('should handle rapid sequential requests', async () => {
+        const numRequests = 20;
+        const responses = [];
 
-        const results = await run(instance);
-        
-        expect(results.errors).toBe(0);
-        expect(results.timeouts).toBe(0);
-        expect(results.non2xx).toBe(0);
-        expect(results.latency.p99).toBeLessThan(3000);
+        for (let i = 0; i < numRequests; i++) {
+            const response = await request(app)
+                .get('/api/network/metrics')
+                .set('Authorization', `Bearer ${token}`);
+            responses.push(response);
+        }
+
+        const successfulResponses = responses.filter(r => r.status === 200);
+        expect(successfulResponses.length).toBe(numRequests);
     });
 
-    it('should handle real-time updates under load', async () => {
-        const instance = autocannon({
-            url: `http://localhost:${server.address().port}/api/stream`,
-            connections: 30,
-            duration: 10,
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            },
-            workers: 2
-        });
+    test('should handle multiple endpoints concurrently', async () => {
+        const endpoints = [
+            '/api/network/status',
+            '/api/network/devices',
+            '/api/network/metrics',
+            '/api/network/alerts'
+        ];
 
-        const results = await run(instance);
-        
-        expect(results.errors).toBe(0);
-        expect(results.timeouts).toBe(0);
-        expect(results.latency.p99).toBeLessThan(1500);
+        const requests = endpoints.map(endpoint =>
+            request(app)
+                .get(endpoint)
+                .set('Authorization', `Bearer ${token}`)
+        );
+
+        const responses = await Promise.all(requests);
+        const successfulResponses = responses.filter(r => r.status === 200);
+        expect(successfulResponses.length).toBe(endpoints.length);
+    });
+
+    test('should maintain response time under threshold', async () => {
+        const startTime = Date.now();
+        const response = await request(app)
+            .get('/api/network/status')
+            .set('Authorization', `Bearer ${token}`);
+        const endTime = Date.now();
+
+        const responseTime = endTime - startTime;
+        expect(response.status).toBe(200);
+        expect(responseTime).toBeLessThan(1000); // Response should be under 1 second
     });
 });

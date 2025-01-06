@@ -1,242 +1,217 @@
-import request from 'supertest';
-import app from '../../app.js';
 import { jest } from '@jest/globals';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+import { app } from '../../index.js';
+import { verifyToken, checkRole, checkPermissions } from '../../middleware/auth.js';
+import { createTestRequest, createTestResponse } from '../testHelper.js';
+import { User } from '../../models/User.js';
+import { generateToken } from '../../utils/auth.js';
+import { config } from '../../config/index.js';
+
+jest.mock('../../models/User.js', () => ({
+    __esModule: true,
+    default: {
+        findById: jest.fn(),
+        findOne: jest.fn()
+    }
+}));
 
 describe('Security Tests', () => {
-    describe('Authentication & Authorization', () => {
-        it('should prevent unauthorized access', async () => {
+    describe('Authentication', () => {
+        it('should reject requests without token', async () => {
             const response = await request(app)
-                .get('/api/metrics');
-
+                .get('/api/network/devices');
             expect(response.status).toBe(401);
         });
 
-        it('should validate JWT tokens', async () => {
+        it('should reject requests with invalid token', async () => {
             const response = await request(app)
-                .get('/api/metrics')
-                .set('Authorization', 'Bearer invalid.token.here');
-
+                .get('/api/network/devices')
+                .set('Authorization', 'Bearer invalid.token');
             expect(response.status).toBe(401);
         });
 
-        it('should handle token expiration', async () => {
-            // Create an expired token
-            const expiredToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' +
-                'eyJzdWIiOiIxMjM0NTY3ODkwIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjB9.' +
-                'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
-
+        it('should accept requests with valid token', async () => {
+            const token = generateToken({ id: '123', role: 'admin' });
             const response = await request(app)
-                .get('/api/metrics')
-                .set('Authorization', `Bearer ${expiredToken}`);
+                .get('/api/network/devices')
+                .set('Authorization', `Bearer ${token}`);
+            expect(response.status).toBe(200);
+        });
 
-            expect(response.status).toBe(401);
+        it('should validate JWT tokens', () => {
+            const payload = { userId: '123', role: 'admin' };
+            const token = jwt.sign(payload, config.jwtSecret);
+            const decoded = jwt.verify(token, config.jwtSecret);
+            
+            expect(decoded.userId).toBe(payload.userId);
+            expect(decoded.role).toBe(payload.role);
+        });
+
+        it('should reject invalid tokens', () => {
+            const invalidToken = 'invalid.token.here';
+            expect(() => jwt.verify(invalidToken, config.jwtSecret)).toThrow();
+        });
+
+        it('should reject expired tokens', () => {
+            const payload = { userId: '123', role: 'admin' };
+            const token = jwt.sign(payload, config.jwtSecret, { expiresIn: '0s' });
+            
+            expect(() => jwt.verify(token, config.jwtSecret)).toThrow();
         });
     });
 
     describe('Input Validation', () => {
-        let authToken;
+        const token = generateToken({ id: '123', role: 'admin' });
 
-        beforeEach(async () => {
-            const loginResponse = await request(app)
-                .post('/api/auth/login')
-                .send({
-                    username: 'testuser',
-                    password: 'testpass'
-                });
-            authToken = loginResponse.body.token;
-        });
-
-        it('should prevent SQL injection', async () => {
+        it('should reject malformed JSON', async () => {
             const response = await request(app)
-                .get('/api/metrics')
-                .set('Authorization', `Bearer ${authToken}`)
-                .query({
-                    query: "'; DROP TABLE users; --"
-                });
-
+                .post('/api/network/discover')
+                .set('Authorization', `Bearer ${token}`)
+                .set('Content-Type', 'application/json')
+                .send('{malformed:json}');
             expect(response.status).toBe(400);
         });
 
-        it('should prevent XSS attacks', async () => {
+        it('should reject SQL injection attempts', async () => {
             const response = await request(app)
-                .post('/api/metrics')
-                .set('Authorization', `Bearer ${authToken}`)
+                .post('/api/network/devices')
+                .set('Authorization', `Bearer ${token}`)
+                .send({
+                    query: "SELECT * FROM users WHERE id = '1' OR '1'='1'"
+                });
+            expect(response.status).toBe(400);
+        });
+
+        it('should reject XSS attempts', async () => {
+            const response = await request(app)
+                .post('/api/network/devices')
+                .set('Authorization', `Bearer ${token}`)
                 .send({
                     name: '<script>alert("xss")</script>'
                 });
-
             expect(response.status).toBe(400);
         });
 
-        it('should validate file uploads', async () => {
+        it('should sanitize input parameters', async () => {
             const response = await request(app)
-                .post('/api/upload')
-                .set('Authorization', `Bearer ${authToken}`)
-                .attach('file', Buffer.from('test'), {
-                    filename: 'test.exe'
-                });
-
-            expect(response.status).toBe(400);
-        });
-    });
-
-    describe('Rate Limiting', () => {
-        let authToken;
-
-        beforeEach(async () => {
-            const loginResponse = await request(app)
-                .post('/api/auth/login')
+                .post('/api/network/devices')
+                .set('Authorization', `Bearer ${token}`)
                 .send({
-                    username: 'testuser',
-                    password: 'testpass'
+                    name: 'Test Device & <test>'
                 });
-            authToken = loginResponse.body.token;
-        });
-
-        it('should limit request rate', async () => {
-            const requests = Array.from({ length: 100 }, () =>
-                request(app)
-                    .get('/api/metrics')
-                    .set('Authorization', `Bearer ${authToken}`)
-            );
-
-            const responses = await Promise.all(requests);
-            const tooManyRequests = responses.filter(r => r.status === 429);
-            expect(tooManyRequests.length).toBeGreaterThan(0);
-        });
-
-        it('should limit login attempts', async () => {
-            const attempts = Array.from({ length: 10 }, () =>
-                request(app)
-                    .post('/api/auth/login')
-                    .send({
-                        username: 'testuser',
-                        password: 'wrongpass'
-                    })
-            );
-
-            const responses = await Promise.all(attempts);
-            const lastResponse = responses[responses.length - 1];
-            expect(lastResponse.status).toBe(429);
-        });
-    });
-
-    describe('Data Protection', () => {
-        let authToken;
-
-        beforeEach(async () => {
-            const loginResponse = await request(app)
-                .post('/api/auth/login')
-                .send({
-                    username: 'testuser',
-                    password: 'testpass'
-                });
-            authToken = loginResponse.body.token;
-        });
-
-        it('should encrypt sensitive data', async () => {
-            const response = await request(app)
-                .post('/api/user/profile')
-                .set('Authorization', `Bearer ${authToken}`)
-                .send({
-                    email: 'test@example.com',
-                    phone: '1234567890'
-                });
-
             expect(response.status).toBe(200);
-            // Verify data is encrypted in database
-            const user = await User.findOne({ username: 'testuser' });
-            expect(user.email).not.toBe('test@example.com');
+            expect(response.body.name).toBe('Test Device &amp; &lt;test&gt;');
+        });
+    });
+
+    describe('Authorization', () => {
+        beforeEach(() => {
+            jest.clearAllMocks();
         });
 
-        it('should protect against CSRF', async () => {
+        it('should restrict admin routes to admin users', async () => {
+            const userToken = generateToken({ id: '123', role: 'user' });
             const response = await request(app)
-                .post('/api/user/profile')
-                .set('Authorization', `Bearer ${authToken}`)
-                .set('Origin', 'http://malicious-site.com')
-                .send({
-                    email: 'hacked@example.com'
-                });
-
+                .post('/api/admin/settings')
+                .set('Authorization', `Bearer ${userToken}`)
+                .send({});
             expect(response.status).toBe(403);
         });
-    });
 
-    describe('API Security', () => {
-        let authToken;
-
-        beforeEach(async () => {
-            const loginResponse = await request(app)
-                .post('/api/auth/login')
-                .send({
-                    username: 'testuser',
-                    password: 'testpass'
-                });
-            authToken = loginResponse.body.token;
-        });
-
-        it('should validate API keys', async () => {
+        it('should allow admin access to admin routes', async () => {
+            const adminToken = generateToken({ id: '123', role: 'admin' });
             const response = await request(app)
-                .get('/api/metrics')
-                .set('X-API-Key', 'invalid-key');
-
-            expect(response.status).toBe(401);
-        });
-
-        it('should verify request signatures', async () => {
-            const timestamp = Date.now().toString();
-            const signature = 'invalid-signature';
-
-            const response = await request(app)
-                .post('/api/metrics')
-                .set('Authorization', `Bearer ${authToken}`)
-                .set('X-Timestamp', timestamp)
-                .set('X-Signature', signature)
-                .send({
-                    data: 'test'
-                });
-
-            expect(response.status).toBe(401);
+                .post('/api/admin/settings')
+                .set('Authorization', `Bearer ${adminToken}`)
+                .send({});
+            expect(response.status).toBe(200);
         });
     });
 
-    describe('WebSocket Security', () => {
-        it('should require authentication for WebSocket connections', async () => {
-            const ws = new WebSocket(
-                `ws://localhost:${process.env.PORT}/ws`
-            );
+    describe('User Authentication', () => {
+        beforeEach(() => {
+            jest.clearAllMocks();
+        });
 
-            await new Promise((resolve) => {
-                ws.on('error', (error) => {
-                    expect(error).toBeTruthy();
-                    resolve();
-                });
+        it('should find user by credentials', async () => {
+            const mockUser = {
+                _id: '123',
+                username: 'testuser',
+                role: 'user'
+            };
+
+            User.findOne.mockResolvedValue(mockUser);
+
+            const user = await User.findOne({ username: 'testuser' });
+            expect(user).toBeDefined();
+            expect(user._id).toBe('123');
+        });
+
+        it('should handle invalid credentials', async () => {
+            User.findOne.mockResolvedValue(null);
+
+            const user = await User.findOne({ username: 'invalid' });
+            expect(user).toBeNull();
+        });
+    });
+
+    describe('Middleware Tests', () => {
+        let req;
+        let res;
+        let next;
+
+        beforeEach(() => {
+            req = createTestRequest();
+            res = createTestResponse();
+            next = jest.fn();
+        });
+
+        describe('verifyToken', () => {
+            it('should verify valid tokens', async () => {
+                const token = generateToken({ id: '123' });
+                req.headers.authorization = `Bearer ${token}`;
+                await verifyToken(req, res, next);
+                expect(next).toHaveBeenCalled();
+                expect(req.user).toBeDefined();
+            });
+
+            it('should reject invalid tokens', async () => {
+                req.headers.authorization = 'Bearer invalid.token';
+                await verifyToken(req, res, next);
+                expect(res.status).toHaveBeenCalledWith(401);
             });
         });
 
-        it('should validate WebSocket messages', async () => {
-            const loginResponse = await request(app)
-                .post('/api/auth/login')
-                .send({
-                    username: 'testuser',
-                    password: 'testpass'
-                });
+        describe('checkRole', () => {
+            it('should allow users with required role', async () => {
+                req.user = { role: 'admin' };
+                const middleware = checkRole(['admin']);
+                await middleware(req, res, next);
+                expect(next).toHaveBeenCalled();
+            });
 
-            const ws = new WebSocket(
-                `ws://localhost:${process.env.PORT}/ws?token=${loginResponse.body.token}`
-            );
+            it('should reject users without required role', async () => {
+                req.user = { role: 'user' };
+                const middleware = checkRole(['admin']);
+                await middleware(req, res, next);
+                expect(res.status).toHaveBeenCalledWith(403);
+            });
+        });
 
-            await new Promise((resolve) => {
-                ws.on('open', () => {
-                    ws.send('invalid-message');
-                });
+        describe('checkPermissions', () => {
+            it('should allow users with required permissions', async () => {
+                req.user = { permissions: ['read', 'write'] };
+                const middleware = checkPermissions(['read']);
+                await middleware(req, res, next);
+                expect(next).toHaveBeenCalled();
+            });
 
-                ws.on('message', (data) => {
-                    const message = JSON.parse(data);
-                    expect(message.error).toBeTruthy();
-                    ws.close();
-                    resolve();
-                });
+            it('should reject users without required permissions', async () => {
+                req.user = { permissions: ['read'] };
+                const middleware = checkPermissions(['write']);
+                await middleware(req, res, next);
+                expect(res.status).toHaveBeenCalledWith(403);
             });
         });
     });

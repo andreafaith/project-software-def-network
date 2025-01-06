@@ -1,6 +1,6 @@
 import logger from './logger.js';
 
-export class MovingAverage {
+class MovingAverage {
     constructor(data, windowSize = 24) {
         this.data = data;
         this.windowSize = windowSize;
@@ -20,7 +20,7 @@ export class MovingAverage {
     }
 }
 
-export class ExponentialSmoothing {
+class ExponentialSmoothing {
     constructor(data, options = {}) {
         this.data = data;
         this.alpha = options.alpha || 0.2; // Level smoothing
@@ -28,10 +28,15 @@ export class ExponentialSmoothing {
         this.gamma = options.gamma || 0.3;  // Seasonal smoothing
         this.seasonalPeriods = options.seasonalPeriods || 24;
         this.confidence = options.confidence || 0.95;
+        this.trained = false;
     }
 
     async train() {
         try {
+            if (!Array.isArray(this.data) || this.data.length < 2) {
+                throw new Error('Insufficient data for model training');
+            }
+
             // Initialize components
             this.level = this.data[0];
             this.trend = this._initializeTrend();
@@ -44,6 +49,7 @@ export class ExponentialSmoothing {
 
             // Calculate error metrics
             this.error = this._calculateError();
+            this.trained = true; // Mark model as trained
             
             return {
                 level: this.level,
@@ -58,34 +64,36 @@ export class ExponentialSmoothing {
         }
     }
 
-    async forecast(horizon) {
+    async forecast(horizon = 24) {
         try {
-            const forecasts = [];
-            let level = this.level;
-            let trend = this.trend;
+            if (!this.trained || !this.level || !this.trend || !this.seasonals) {
+                throw new Error('Model must be trained before forecasting');
+            }
 
-            for (let i = 1; i <= horizon; i++) {
-                const seasonalIndex = (this.data.length + i) % this.seasonalPeriods;
+            const predictions = [];
+            let lastLevel = this.level;
+            let lastTrend = this.trend;
+
+            for (let h = 1; h <= horizon; h++) {
+                const seasonalIndex = (this.data.length + h - 1) % this.seasonalPeriods;
                 const seasonal = this.seasonals[seasonalIndex];
-                
-                // Calculate forecast
-                const forecast = (level + trend * i) * seasonal;
+                const forecast = (lastLevel + h * lastTrend) * seasonal;
                 
                 // Calculate prediction intervals
-                const stderr = this._calculateStandardError(i);
-                const z = this._getZScore(this.confidence);
-                const interval = stderr * z;
+                const sigma = Math.sqrt(this.error.mse);
+                const z = 1.96; // 95% confidence interval
+                const interval = z * sigma * Math.sqrt(1 + h / this.data.length);
 
-                forecasts.push({
-                    point: forecast,
-                    lower: forecast - interval,
-                    upper: forecast + interval,
-                    timestamp: this._getForecastTimestamp(i)
+                predictions.push({
+                    value: forecast,
+                    confidence: {
+                        lower: forecast - interval,
+                        upper: forecast + interval
+                    }
                 });
             }
 
-            return forecasts;
-
+            return predictions;
         } catch (error) {
             logger.error('Error generating forecast:', error);
             throw error;
@@ -93,114 +101,89 @@ export class ExponentialSmoothing {
     }
 
     _initializeTrend() {
-        let sum = 0;
-        for (let i = 0; i < Math.min(this.data.length, this.seasonalPeriods); i++) {
-            sum += (this.data[i + this.seasonalPeriods] - this.data[i]) / this.seasonalPeriods;
-        }
-        return sum / this.seasonalPeriods;
+        const sum = this.data.slice(0, Math.min(this.data.length, this.seasonalPeriods))
+            .reduce((acc, val, i) => acc + (val - this.data[0]) / (i + 1), 0);
+        return sum / Math.min(this.data.length, this.seasonalPeriods);
     }
 
     _initializeSeasonalComponents() {
-        const seasonals = new Array(this.seasonalPeriods).fill(0);
-        const seasonsCount = Math.floor(this.data.length / this.seasonalPeriods);
+        const seasonals = new Array(this.seasonalPeriods).fill(1);
+        const counts = new Array(this.seasonalPeriods).fill(0);
+        const trend = this.data.map((_, i) => this.level + i * this.trend);
 
-        // Calculate average for each season
-        for (let season = 0; season < this.seasonalPeriods; season++) {
-            let sum = 0;
-            for (let i = 0; i < seasonsCount; i++) {
-                sum += this.data[season + i * this.seasonalPeriods];
+        // Calculate seasonal indices
+        for (let i = 0; i < this.data.length; i++) {
+            if (trend[i] !== undefined && trend[i] !== null) {
+                const period = i % this.seasonalPeriods;
+                seasonals[period] += this.data[i] / trend[i];
+                counts[period]++;
             }
-            seasonals[season] = sum / seasonsCount;
         }
 
-        // Normalize seasonal components
-        const seasonalsSum = seasonals.reduce((a, b) => a + b, 0);
-        const normalizer = this.seasonalPeriods / seasonalsSum;
-        return seasonals.map(s => s * normalizer);
+        // Average the seasonal indices
+        for (let i = 0; i < this.seasonalPeriods; i++) {
+            if (counts[i] > 0) {
+                seasonals[i] /= counts[i];
+            }
+        }
+
+        // Normalize seasonal factors
+        const seasonalMean = seasonals.reduce((a, b) => a + b) / this.seasonalPeriods;
+        const normalizedSeasonal = seasonals.map(s => s / seasonalMean);
+
+        // Replicate seasonal pattern for the entire series
+        return this.data.map((_, i) => normalizedSeasonal[i % this.seasonalPeriods]);
     }
 
     async _updateComponents(i) {
-        const value = this.data[i];
-        const seasonalIndex = i % this.seasonalPeriods;
-        const lastSeasonal = this.seasonals[seasonalIndex];
-        const lastLevel = this.level;
-        const lastTrend = this.trend;
+        const y = this.data[i];
+        const s = this.seasonals[i % this.seasonalPeriods];
 
         // Update level
-        this.level = this.alpha * (value / lastSeasonal) + 
-                     (1 - this.alpha) * (lastLevel + lastTrend);
-
+        const newLevel = this.alpha * (y / s) + (1 - this.alpha) * (this.level + this.trend);
+        
         // Update trend
-        this.trend = this.beta * (this.level - lastLevel) + 
-                     (1 - this.beta) * lastTrend;
+        const newTrend = this.beta * (newLevel - this.level) + (1 - this.beta) * this.trend;
+        
+        // Update seasonal
+        const newSeasonal = this.gamma * (y / newLevel) + (1 - this.gamma) * s;
 
-        // Update seasonal component
-        this.seasonals[seasonalIndex] = this.gamma * (value / this.level) + 
-                                      (1 - this.gamma) * lastSeasonal;
+        // Store updated values
+        this.level = newLevel;
+        this.trend = newTrend;
+        this.seasonals[i % this.seasonalPeriods] = newSeasonal;
     }
 
     _calculateError() {
-        let sumSquaredError = 0;
-        let sumAbsPercentError = 0;
+        let mse = 0;
+        let mae = 0;
         let n = 0;
 
         for (let i = 0; i < this.data.length; i++) {
-            const actual = this.data[i];
-            const predicted = this._getForecastValue(i);
-
-            if (actual !== 0) {
-                sumSquaredError += Math.pow(actual - predicted, 2);
-                sumAbsPercentError += Math.abs((actual - predicted) / actual);
-                n++;
-            }
+            const s = this.seasonals[i % this.seasonalPeriods];
+            const forecast = this.level * s;
+            const error = this.data[i] - forecast;
+            
+            mse += error * error;
+            mae += Math.abs(error);
+            n++;
         }
 
         return {
-            rmse: Math.sqrt(sumSquaredError / n),
-            mape: (sumAbsPercentError / n) * 100
+            mse: mse / n,
+            mae: mae / n,
+            rmse: Math.sqrt(mse / n)
         };
-    }
-
-    _calculateStandardError(h) {
-        // Holt-Winters standard error calculation
-        const variances = this.data.map((actual, i) => {
-            const predicted = this._getForecastValue(i);
-            return Math.pow(actual - predicted, 2);
-        });
-
-        const mse = variances.reduce((a, b) => a + b, 0) / variances.length;
-        return Math.sqrt(mse * (1 + h * (h + 1) / (2 * this.data.length)));
-    }
-
-    _getForecastValue(i) {
-        const seasonalIndex = i % this.seasonalPeriods;
-        return (this.level + this.trend * i) * this.seasonals[seasonalIndex];
-    }
-
-    _getZScore(confidence) {
-        // Z-score for common confidence levels
-        const zScores = {
-            0.99: 2.576,
-            0.95: 1.96,
-            0.90: 1.645,
-            0.85: 1.44
-        };
-        return zScores[confidence] || 1.96;
-    }
-
-    _getForecastTimestamp(i) {
-        return new Date(Date.now() + i * 60 * 60 * 1000); // Hourly forecasts
     }
 }
 
-export class SeasonalDecomposition {
+class SeasonalDecomposition {
     constructor(data, period) {
         this.data = data;
         this.period = period;
     }
 
     decompose() {
-        // Implement seasonal decomposition (additive model)
         const trend = this._calculateTrend();
         const seasonal = this._calculateSeasonal(trend);
         const residual = this._calculateResidual(trend, seasonal);
@@ -213,70 +196,100 @@ export class SeasonalDecomposition {
     }
 
     _calculateTrend() {
+        // Implement centered moving average
         const ma = new MovingAverage(this.data, this.period);
         return ma.calculate();
     }
 
     _calculateSeasonal(trend) {
-        const detrended = this.data.map((value, i) => value - trend[i]);
-        const seasonal = new Array(this.period).fill(0);
-        
-        // Calculate average seasonal pattern
+        const seasonal = new Array(this.data.length).fill(0);
+        const seasonalPattern = new Array(this.period).fill(0);
+        const seasonalCounts = new Array(this.period).fill(0);
+
+        // Calculate detrended series and average by season
         for (let i = 0; i < this.data.length; i++) {
-            const seasonIndex = i % this.period;
-            seasonal[seasonIndex] += detrended[i] / Math.floor(this.data.length / this.period);
+            if (trend[i] !== 0) {
+                const period = i % this.period;
+                seasonalPattern[period] += this.data[i] / trend[i];
+                seasonalCounts[period]++;
+            }
         }
 
-        // Normalize seasonal components
-        const seasonalMean = seasonal.reduce((a, b) => a + b, 0) / this.period;
-        return seasonal.map(s => s - seasonalMean);
+        // Calculate average seasonal pattern
+        for (let i = 0; i < this.period; i++) {
+            if (seasonalCounts[i] > 0) {
+                seasonalPattern[i] /= seasonalCounts[i];
+            }
+        }
+
+        // Normalize seasonal pattern
+        const patternMean = seasonalPattern.reduce((a, b) => a + b) / this.period;
+        const normalizedPattern = seasonalPattern.map(x => x / patternMean);
+
+        // Apply pattern to the full series
+        for (let i = 0; i < this.data.length; i++) {
+            seasonal[i] = normalizedPattern[i % this.period];
+        }
+
+        return seasonal;
     }
 
     _calculateResidual(trend, seasonal) {
-        return this.data.map((value, i) => 
-            value - trend[i] - seasonal[i % this.period]
-        );
+        return this.data.map((x, i) => x / (trend[i] * seasonal[i]));
     }
 }
 
-export class TimeSeriesAnalysis {
+class TimeSeriesAnalysis {
     static calculateStatistics(data) {
-        const values = data.map(d => d.value);
-        const n = values.length;
+        if (!Array.isArray(data) || data.length === 0) {
+            throw new Error('Input must be a non-empty array');
+        }
 
-        const mean = values.reduce((a, b) => a + b, 0) / n;
-        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+        const n = data.length;
+        const mean = data.reduce((a, b) => a + b) / n;
+        const variance = data.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / n;
         const stdDev = Math.sqrt(variance);
+        const sortedData = [...data].sort((a, b) => a - b);
+        const median = this._calculateMedian(sortedData);
+        const skewness = this._calculateSkewness(data, mean, stdDev);
+        const kurtosis = this._calculateKurtosis(data, mean, stdDev);
 
         return {
             mean,
-            median: this._calculateMedian(values),
+            median,
+            variance,
             stdDev,
-            min: Math.min(...values),
-            max: Math.max(...values),
-            skewness: this._calculateSkewness(values, mean, stdDev),
-            kurtosis: this._calculateKurtosis(values, mean, stdDev)
+            skewness,
+            kurtosis,
+            min: sortedData[0],
+            max: sortedData[n - 1]
         };
     }
 
     static _calculateMedian(values) {
-        const sorted = [...values].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        return sorted.length % 2 === 0
-            ? (sorted[mid - 1] + sorted[mid]) / 2
-            : sorted[mid];
+        const mid = Math.floor(values.length / 2);
+        return values.length % 2 === 0
+            ? (values[mid - 1] + values[mid]) / 2
+            : values[mid];
     }
 
     static _calculateSkewness(values, mean, stdDev) {
         const n = values.length;
-        const sum = values.reduce((a, b) => a + Math.pow((b - mean) / stdDev, 3), 0);
-        return (n / ((n - 1) * (n - 2))) * sum;
+        const cubedDeviations = values.map(x => Math.pow((x - mean) / stdDev, 3));
+        return (n / ((n - 1) * (n - 2))) * cubedDeviations.reduce((a, b) => a + b);
     }
 
     static _calculateKurtosis(values, mean, stdDev) {
         const n = values.length;
-        const sum = values.reduce((a, b) => a + Math.pow((b - mean) / stdDev, 4), 0);
-        return ((n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3))) * sum - 
-               (3 * Math.pow(n - 1, 2)) / ((n - 2) * (n - 3));
+        const fourthMoment = values.map(x => Math.pow((x - mean) / stdDev, 4))
+            .reduce((a, b) => a + b) / n;
+        return fourthMoment - 3; // Excess kurtosis
     }
 }
+
+export {
+    MovingAverage,
+    ExponentialSmoothing,
+    SeasonalDecomposition,
+    TimeSeriesAnalysis
+};

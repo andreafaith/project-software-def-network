@@ -1,80 +1,77 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { Redis } from 'ioredis';
+import dotenv from 'dotenv';
+import { TextEncoder, TextDecoder } from 'util';
 import { jest } from '@jest/globals';
 
-let mongoServer;
+// Load environment variables
+dotenv.config({ path: '.env.test' });
 
-// Setup MongoDB Memory Server
-beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
-    await mongoose.connect(mongoUri);
-});
-
-// Clear database between tests
-beforeEach(async () => {
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-        await collections[key].deleteMany();
-    }
-});
-
-// Cleanup after tests
-afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-});
+// Add TextEncoder/TextDecoder to global (needed for some ES modules)
+global.TextEncoder = TextEncoder;
+global.TextDecoder = TextDecoder;
 
 // Mock Redis
-jest.mock('ioredis', () => {
-    const redisMock = {
-        get: jest.fn(),
-        set: jest.fn(),
-        del: jest.fn(),
-        exists: jest.fn(),
-        expire: jest.fn(),
-        scan: jest.fn(),
-        pipeline: jest.fn(),
-        multi: jest.fn(),
-        exec: jest.fn(),
-        connect: jest.fn(),
-        disconnect: jest.fn()
-    };
+const mockRedisClient = {
+  get: jest.fn(),
+  set: jest.fn(),
+  del: jest.fn(),
+  quit: jest.fn()
+};
 
-    return jest.fn(() => redisMock);
+// Create a single instance of MongoMemoryServer
+let mongod;
+
+// Mock Socket.IO
+const mockSocketServer = {
+  use: jest.fn(),
+  on: jest.fn(),
+  emit: jest.fn()
+};
+
+// Mock modules before any tests run
+beforeAll(async () => {
+  // Mock Redis
+  await jest.unstable_mockModule('ioredis', () => ({
+    default: jest.fn(() => mockRedisClient)
+  }));
+
+  // Mock Socket.IO
+  await jest.unstable_mockModule('socket.io', () => ({
+    Server: jest.fn(() => mockSocketServer)
+  }));
+
+  // Set up MongoDB Memory Server
+  mongod = await MongoMemoryServer.create();
+  const uri = mongod.getUri();
+  
+  // Close any existing connections
+  await mongoose.disconnect();
+  
+  // Connect to the in-memory database
+  await mongoose.connect(uri, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+  });
 });
 
-// Mock WebSocket
-jest.mock('ws', () => {
-    const wsMock = {
-        on: jest.fn(),
-        send: jest.fn(),
-        close: jest.fn()
-    };
-
-    return jest.fn(() => wsMock);
+// Clear all test data after each test
+afterEach(async () => {
+  const collections = mongoose.connection.collections;
+  for (const key in collections) {
+    await collections[key].deleteMany();
+  }
+  // Clear all mocks
+  jest.clearAllMocks();
 });
 
-// Global test timeout
-jest.setTimeout(30000);
-
-// Custom matchers
-expect.extend({
-    toBeWithinRange(received, floor, ceiling) {
-        const pass = received >= floor && received <= ceiling;
-        if (pass) {
-            return {
-                message: () =>
-                    `expected ${received} not to be within range ${floor} - ${ceiling}`,
-                pass: true
-            };
-        } else {
-            return {
-                message: () =>
-                    `expected ${received} to be within range ${floor} - ${ceiling}`,
-                pass: false
-            };
-        }
-    }
+// Close database connection after all tests
+afterAll(async () => {
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.connection.dropDatabase();
+    await mongoose.connection.close();
+  }
+  if (mongod) {
+    await mongod.stop();
+  }
 });

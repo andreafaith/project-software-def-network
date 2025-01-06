@@ -1,229 +1,139 @@
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { createClient } from 'redis';
-import jwt from 'jsonwebtoken';
+import Redis from 'ioredis';
 import logger from '../utils/logger.js';
+import { verifyToken } from '../middleware/auth.js';
 
 class WebSocketService {
     constructor() {
         this.io = null;
-        this.redisClient = null;
-        this.subscribers = new Map();
+        this.pubClient = null;
+        this.subClient = null;
+        this.redisEnabled = false;
     }
 
     async initialize(server) {
-        try {
-            // Initialize Redis clients for Socket.IO adapter
-            const pubClient = createClient({ url: process.env.REDIS_URL });
-            const subClient = pubClient.duplicate();
+        // Initialize Socket.IO
+        this.io = new Server(server, {
+            cors: {
+                origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+                methods: ['GET', 'POST'],
+                credentials: true
+            }
+        });
 
-            await Promise.all([pubClient.connect(), subClient.connect()]);
-
-            // Initialize Socket.IO with Redis adapter
-            this.io = new Server(server, {
-                cors: {
-                    origin: process.env.CORS_ORIGIN || '*',
-                    methods: ['GET', 'POST']
-                },
-                pingTimeout: 60000,
-                pingInterval: 25000
-            });
-
-            this.io.adapter(createAdapter(pubClient, subClient));
-
-            // Set up authentication middleware
-            this.io.use(async (socket, next) => {
-                try {
-                    const token = socket.handshake.auth.token;
-                    if (!token) {
-                        return next(new Error('Authentication token required'));
-                    }
-
-                    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                    socket.user = decoded;
-                    next();
-                } catch (error) {
-                    next(new Error('Invalid authentication token'));
+        // Setup authentication middleware
+        this.io.use(async (socket, next) => {
+            try {
+                const token = socket.handshake.auth.token || socket.handshake.headers.authorization;
+                if (!token) {
+                    return next(new Error('Authentication token is required'));
                 }
+
+                const user = await verifyToken(token);
+                if (!user) {
+                    return next(new Error('Invalid authentication token'));
+                }
+
+                socket.user = user;
+                next();
+            } catch (error) {
+                logger.error('WebSocket authentication error:', error);
+                next(new Error('Authentication failed'));
+            }
+        });
+
+        // Initialize Redis adapter if Redis is available
+        try {
+            if (process.env.NODE_ENV !== 'test') {
+                await this.initializeRedis();
+            }
+        } catch (error) {
+            logger.warn('Redis adapter initialization failed, falling back to in-memory adapter:', error);
+            this.redisEnabled = false;
+        }
+
+        // Setup event handlers
+        this.io.on('connection', (socket) => {
+            logger.info(`Client connected: ${socket.id}`);
+
+            socket.on('disconnect', () => {
+                logger.info(`Client disconnected: ${socket.id}`);
             });
 
-            // Handle connections
-            this.io.on('connection', this.handleConnection.bind(this));
+            socket.on('error', (error) => {
+                logger.error(`Socket error for client ${socket.id}:`, error);
+            });
+        });
 
-            logger.info('WebSocket server initialized successfully');
+        logger.info('WebSocket service initialized successfully');
+    }
+
+    async initializeRedis() {
+        const redisUrl = process.env.REDIS_URL;
+        if (!redisUrl) {
+            throw new Error('Redis URL is not configured');
+        }
+
+        try {
+            // Create Redis clients using Redis URL
+            this.pubClient = new Redis(redisUrl);
+            this.subClient = new Redis(redisUrl);
+
+            // Handle Redis client events
+            for (const client of [this.pubClient, this.subClient]) {
+                client.on('error', (error) => {
+                    logger.error('Redis client error:', error);
+                });
+
+                client.on('close', () => {
+                    logger.warn('Redis client connection closed');
+                });
+
+                client.on('reconnecting', () => {
+                    logger.info('Redis client reconnecting...');
+                });
+
+                client.on('ready', () => {
+                    logger.info('Redis client ready');
+                });
+            }
+
+            // Wait for both clients to be ready
+            await Promise.all([
+                new Promise((resolve) => this.pubClient.once('ready', resolve)),
+                new Promise((resolve) => this.subClient.once('ready', resolve))
+            ]);
+
+            // Create and set Redis adapter
+            this.io.adapter(createAdapter(this.pubClient, this.subClient));
+            this.redisEnabled = true;
+            logger.info('Redis adapter initialized successfully');
         } catch (error) {
-            logger.error('WebSocket initialization error:', error);
+            logger.error('Failed to initialize Redis adapter:', error);
             throw error;
         }
     }
 
-    handleConnection(socket) {
-        logger.info(`Client connected: ${socket.id}`);
+    emit(event, data) {
+        if (this.io) {
+            this.io.emit(event, data);
+        }
+    }
 
-        // Handle subscriptions
-        socket.on('subscribe', async (data) => {
-            try {
-                await this.handleSubscription(socket, data);
-            } catch (error) {
-                socket.emit('error', { message: error.message });
+    async cleanup() {
+        try {
+            if (this.redisEnabled) {
+                await Promise.all([
+                    this.pubClient?.disconnect(),
+                    this.subClient?.disconnect()
+                ]);
             }
-        });
-
-        // Handle unsubscriptions
-        socket.on('unsubscribe', async (data) => {
-            try {
-                await this.handleUnsubscription(socket, data);
-            } catch (error) {
-                socket.emit('error', { message: error.message });
-            }
-        });
-
-        // Handle disconnection
-        socket.on('disconnect', () => {
-            this.handleDisconnection(socket);
-        });
-    }
-
-    async handleSubscription(socket, { type, id, options = {} }) {
-        // Validate subscription request
-        if (!type) {
-            throw new Error('Subscription type is required');
+            await this.io?.close();
+            logger.info('WebSocket service cleaned up successfully');
+        } catch (error) {
+            logger.error('Error during WebSocket service cleanup:', error);
         }
-
-        // Handle different subscription types
-        switch (type) {
-            case 'device:metrics':
-                await this.subscribeToDeviceMetrics(socket, id, options);
-                break;
-            case 'device:status':
-                await this.subscribeToDeviceStatus(socket, id);
-                break;
-            case 'alerts':
-                await this.subscribeToAlerts(socket, options);
-                break;
-            case 'ml:predictions':
-                await this.subscribeToMLPredictions(socket, options);
-                break;
-            default:
-                throw new Error(`Unknown subscription type: ${type}`);
-        }
-
-        // Track subscription
-        if (!this.subscribers.has(socket.id)) {
-            this.subscribers.set(socket.id, new Set());
-        }
-        this.subscribers.get(socket.id).add(`${type}:${id || 'all'}`);
-
-        socket.emit('subscribed', { type, id });
-        logger.info(`Client ${socket.id} subscribed to ${type}${id ? `:${id}` : ''}`);
-    }
-
-    async handleUnsubscription(socket, { type, id }) {
-        const subscriptions = this.subscribers.get(socket.id);
-        if (subscriptions) {
-            subscriptions.delete(`${type}:${id || 'all'}`);
-        }
-
-        socket.emit('unsubscribed', { type, id });
-        logger.info(`Client ${socket.id} unsubscribed from ${type}${id ? `:${id}` : ''}`);
-    }
-
-    handleDisconnection(socket) {
-        this.subscribers.delete(socket.id);
-        logger.info(`Client disconnected: ${socket.id}`);
-    }
-
-    // Subscription handlers
-    async subscribeToDeviceMetrics(socket, deviceId, options) {
-        if (!deviceId) {
-            throw new Error('Device ID is required for metrics subscription');
-        }
-
-        const room = `metrics:${deviceId}`;
-        await socket.join(room);
-    }
-
-    async subscribeToDeviceStatus(socket, deviceId) {
-        if (!deviceId) {
-            throw new Error('Device ID is required for status subscription');
-        }
-
-        const room = `status:${deviceId}`;
-        await socket.join(room);
-    }
-
-    async subscribeToAlerts(socket, options) {
-        const { severity, types } = options;
-        const rooms = [];
-
-        if (severity) {
-            rooms.push(`alerts:severity:${severity}`);
-        }
-        if (types && Array.isArray(types)) {
-            types.forEach(type => rooms.push(`alerts:type:${type}`));
-        }
-        if (rooms.length === 0) {
-            rooms.push('alerts:all');
-        }
-
-        await Promise.all(rooms.map(room => socket.join(room)));
-    }
-
-    async subscribeToMLPredictions(socket, options) {
-        const { models } = options;
-        const rooms = [];
-
-        if (models && Array.isArray(models)) {
-            models.forEach(model => rooms.push(`ml:${model}`));
-        } else {
-            rooms.push('ml:all');
-        }
-
-        await Promise.all(rooms.map(room => socket.join(room)));
-    }
-
-    // Broadcast methods
-    broadcastMetrics(deviceId, metrics) {
-        this.io.to(`metrics:${deviceId}`).emit('device:metrics', {
-            deviceId,
-            metrics,
-            timestamp: new Date().toISOString()
-        });
-    }
-
-    broadcastStatus(deviceId, status) {
-        this.io.to(`status:${deviceId}`).emit('device:status', {
-            deviceId,
-            status,
-            timestamp: new Date().toISOString()
-        });
-    }
-
-    broadcastAlert(alert) {
-        const rooms = [
-            'alerts:all',
-            `alerts:severity:${alert.severity}`,
-            `alerts:type:${alert.type}`
-        ];
-
-        rooms.forEach(room => {
-            this.io.to(room).emit('alert:new', {
-                ...alert,
-                timestamp: new Date().toISOString()
-            });
-        });
-    }
-
-    broadcastMLPrediction(model, prediction) {
-        const rooms = ['ml:all', `ml:${model}`];
-
-        rooms.forEach(room => {
-            this.io.to(room).emit('ml:prediction', {
-                model,
-                prediction,
-                timestamp: new Date().toISOString()
-            });
-        });
     }
 }
 

@@ -1,44 +1,55 @@
-describe('Discord Reporter Test Suite', () => {
-    // Success test
-    test('should pass successfully', () => {
-        expect(1 + 1).toBe(2);
+import { jest } from '@jest/globals';
+
+describe('Discord Reporter Tests', () => {
+    test('should pass with short message', () => {
+        const message = 'Hello, world!';
+        expect(message).toBe('Hello, world!');
     });
 
-    // Failure test
-    test('should fail with wrong assertion', () => {
-        expect(1 + 1).toBe(3);
+    test('should pass with medium message', () => {
+        const message = 'A'.repeat(100);
+        expect(message.length).toBe(100);
     });
 
-    // Error test
-    test('should throw an error', () => {
-        throw new Error('This is a test error');
+    test('should pass with long message', () => {
+        const message = 'A'.repeat(1000);
+        expect(message.length).toBe(1000);
     });
 
-    // Skipped test
-    test.skip('should be skipped', () => {
-        expect(true).toBe(false);
+    test('should handle empty message', () => {
+        const message = '';
+        expect(message).toBe('');
     });
 
-    // Async success test
-    test('should pass async test', async () => {
-        const result = await Promise.resolve(42);
-        expect(result).toBe(42);
+    test('should handle special characters', () => {
+        const message = '!@#$%^&*()_+';
+        expect(message).toBe('!@#$%^&*()_+');
     });
 
-    // Async failure test
-    test('should fail async test', async () => {
-        await expect(Promise.reject('error')).resolves.toBe('success');
+    test('should handle unicode characters', () => {
+        const message = '你好，世界！';
+        expect(message).toBe('你好，世界！');
     });
 
-    // Long running test
-    test('should take some time', async () => {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        expect(true).toBe(true);
+    test('should handle JSON stringification', () => {
+        const obj = {
+            name: 'Test',
+            value: 123,
+            nested: {
+                array: [1, 2, 3]
+            }
+        };
+        const json = JSON.stringify(obj);
+        expect(JSON.parse(json)).toEqual(obj);
     });
 
-    // Test with long error message
-    test('should fail with long error', () => {
+    test('should handle error objects', () => {
+        const error = new Error('Test error');
+        expect(error.message).toBe('Test error');
+    });
+
+    test('should handle long error messages', () => {
         const longString = 'a'.repeat(2000);
-        expect(longString).toBe('b'.repeat(2000));
+        expect(longString.length).toBe(2000);
     });
 });

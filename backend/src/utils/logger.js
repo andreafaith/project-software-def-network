@@ -8,24 +8,12 @@ const __dirname = dirname(__filename);
 
 // Define log format
 const logFormat = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.errors({ stack: true }),
-  winston.format.splat(),
+  winston.format.timestamp(),
   winston.format.json()
 );
 
-// Define log levels
-const levels = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  http: 3,
-  debug: 4,
-};
-
 // Create the logger
 const logger = winston.createLogger({
-  levels,
   format: logFormat,
   transports: [
     // Write all logs with level 'error' to error.log
@@ -54,9 +42,12 @@ if (process.env.NODE_ENV !== 'production') {
   }));
 }
 
-// Create a stream object for Morgan
-export const stream = {
-  write: (message) => logger.info(message.trim()),
+// Create a stream object for Morgan middleware
+const stream = {
+  write: (message) => {
+    logger.info(message.trim());
+  }
 };
 
+export { stream };
 export default logger;

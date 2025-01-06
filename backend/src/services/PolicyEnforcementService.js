@@ -1,15 +1,19 @@
 import NetworkPolicy from '../models/NetworkPolicy.js';
 import NetworkDevice from '../models/NetworkDevice.js';
-import AutoConfigService from './AutoConfigService.js';
+import { AutoConfigService } from './AutoConfigService.js';
 import logger from '../utils/logger.js';
 
 class PolicyEnforcementService {
+    constructor() {
+        // Initialize any required properties
+    }
+
     /**
      * Deploy policies to a device
      * @param {string} deviceId - Target device ID
      * @param {Array} policyIds - List of policy IDs to deploy (optional)
      */
-    static async deployPolicies(deviceId, policyIds = null) {
+    async deployPolicies(deviceId, policyIds = null) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -45,7 +49,7 @@ class PolicyEnforcementService {
      * Check policy compliance for a device
      * @param {string} deviceId - Device ID to check
      */
-    static async checkCompliance(deviceId) {
+    async checkCompliance(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -83,7 +87,7 @@ class PolicyEnforcementService {
      * @param {string} deviceId - Device ID
      * @param {Array} violations - List of violations
      */
-    static async handleViolations(deviceId, violations) {
+    async handleViolations(deviceId, violations) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -105,7 +109,7 @@ class PolicyEnforcementService {
      * Monitor policy compliance in real-time
      * @param {string} deviceId - Device ID to monitor
      */
-    static async monitorCompliance(deviceId) {
+    async monitorCompliance(deviceId) {
         try {
             const device = await NetworkDevice.findById(deviceId);
             if (!device) {
@@ -137,7 +141,7 @@ class PolicyEnforcementService {
      * Convert policies to device configuration
      * @private
      */
-    static async _convertPoliciesToConfig(device, policies) {
+    async _convertPoliciesToConfig(device, policies) {
         const config = {
             security: {
                 acls: [],
@@ -175,7 +179,7 @@ class PolicyEnforcementService {
      * Check compliance for a specific policy
      * @private
      */
-    static async _checkPolicyCompliance(device, policy, currentConfig) {
+    async _checkPolicyCompliance(device, policy, currentConfig) {
         const result = {
             policyId: policy._id,
             policyName: policy.name,
@@ -198,7 +202,7 @@ class PolicyEnforcementService {
      * Handle a specific violation
      * @private
      */
-    static async _handleViolation(device, violation) {
+    async _handleViolation(device, violation) {
         const response = {
             violationId: violation.id,
             status: 'handled',
@@ -233,7 +237,7 @@ class PolicyEnforcementService {
      * Start compliance monitoring for a device
      * @private
      */
-    static _startComplianceMonitoring(device, config) {
+    _startComplianceMonitoring(device, config) {
         const monitoringJob = setInterval(async () => {
             try {
                 const complianceStatus = await this.checkCompliance(device._id);
@@ -255,7 +259,7 @@ class PolicyEnforcementService {
      * Record policy deployment details
      * @private
      */
-    static async _recordPolicyDeployment(device, policies) {
+    async _recordPolicyDeployment(device, policies) {
         const deployment = {
             timestamp: new Date(),
             deviceId: device._id,
@@ -271,4 +275,5 @@ class PolicyEnforcementService {
     }
 }
 
-export default PolicyEnforcementService;
+const policyEnforcementService = new PolicyEnforcementService();
+export { policyEnforcementService as PolicyEnforcementService };

@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import ApiKey from '../models/ApiKey.js';
 import logger from '../utils/logger.js';
 
-export const mlAuth = async (req, res, next) => {
+const mlAuth = async (req, res, next) => {
     try {
         const apiKey = req.header('X-ML-API-Key');
         const token = req.header('X-ML-Token');
@@ -54,7 +54,7 @@ export const mlAuth = async (req, res, next) => {
     }
 };
 
-export const mlAdminAuth = async (req, res, next) => {
+const mlAdminAuth = async (req, res, next) => {
     try {
         if (!req.mlClient) {
             return res.status(401).json({ error: 'ML authentication required' });
@@ -66,12 +66,12 @@ export const mlAdminAuth = async (req, res, next) => {
 
         next();
     } catch (error) {
-        logger.error('ML admin authentication error:', error);
+        logger.error('ML admin auth error:', error);
         res.status(403).json({ error: 'ML admin authentication failed' });
     }
 };
 
-export const mlRateLimit = async (req, res, next) => {
+const mlRateLimit = async (req, res, next) => {
     try {
         if (!req.mlClient) {
             return res.status(401).json({ error: 'ML authentication required' });
@@ -112,4 +112,10 @@ export const mlRateLimit = async (req, res, next) => {
         logger.error('ML rate limit error:', error);
         res.status(500).json({ error: 'Rate limit check failed' });
     }
+};
+
+export default {
+    mlAuth,
+    mlAdminAuth,
+    mlRateLimit
 };

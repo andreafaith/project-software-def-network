@@ -1,219 +1,69 @@
-import logger from '../utils/logger.js';
 import NetworkMetrics from '../models/NetworkMetrics.js';
-import { MovingAverage, ExponentialSmoothing } from '../utils/TimeSeriesUtils.js';
 
 class PredictiveAnalytics {
     constructor() {
-        this.models = new Map();
-        this.anomalyThreshold = 2.5; // Standard deviations for anomaly detection
-        this.forecastHorizon = 24 * 7; // 7 days ahead in hours
-        this.minDataPoints = 168; // Minimum data points needed (1 week hourly data)
+        this.minDataPoints = 5;
+        this.anomalyThreshold = 2.5; // Standard deviations
+        this.forecastHorizon = 5; // Number of future points to predict
     }
 
-    async analyzeTimeSeries(deviceId, metricType, options = {}) {
-        try {
-            const timeRange = options.timeRange || {
-                start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days
-                end: new Date()
-            };
-
-            // Fetch historical data
-            const data = await this._fetchMetricData(deviceId, metricType, timeRange);
-            
-            // Perform time series analysis
-            const analysis = {
-                trend: await this._analyzeTrend(data),
-                seasonality: await this._analyzeSeasonality(data),
-                statistics: this._calculateStatistics(data),
-                forecast: await this._generateForecast(data, options.horizon)
-            };
-
+    async analyzeTrend(data, metric = 'value') {
+        if (!Array.isArray(data) || data.length < this.minDataPoints) {
             return {
-                deviceId,
-                metricType,
-                timeRange,
-                analysis
+                direction: 'unknown',
+                confidence: 0
             };
-
-        } catch (error) {
-            logger.error('Time series analysis error:', error);
-            throw error;
         }
-    }
 
-    async predictBandwidthUsage(deviceId, options = {}) {
-        try {
-            const horizon = options.horizon || 24; // Default 24 hours ahead
-            
-            // Get historical bandwidth data
-            const data = await this._fetchMetricData(deviceId, 'bandwidth.total', {
-                start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-                end: new Date()
-            });
-
-            // Create prediction model if not exists
-            if (!this.models.has(deviceId)) {
-                await this._initializePredictionModel(deviceId, data);
-            }
-
-            // Generate predictions
-            const predictions = await this._generateBandwidthPredictions(deviceId, horizon);
-            
-            return {
-                deviceId,
-                predictions,
-                confidence: this._calculateConfidenceInterval(predictions),
-                metadata: {
-                    modelType: 'exponential_smoothing',
-                    lastUpdate: new Date(),
-                    accuracy: this.models.get(deviceId).accuracy
-                }
-            };
-
-        } catch (error) {
-            logger.error('Bandwidth prediction error:', error);
-            throw error;
-        }
-    }
-
-    async detectAnomalies(deviceId, options = {}) {
-        try {
-            const metrics = options.metrics || ['bandwidth', 'latency', 'packetLoss'];
-            const results = {};
-
-            for (const metric of metrics) {
-                const data = await this._fetchMetricData(deviceId, metric, options.timeRange);
-                
-                // Detect anomalies using statistical methods
-                const anomalies = this._detectStatisticalAnomalies(data, {
-                    threshold: options.threshold || this.anomalyThreshold,
-                    method: options.method || 'zscore'
-                });
-
-                // Analyze patterns in anomalies
-                const patterns = this._analyzeAnomalyPatterns(anomalies);
-
-                results[metric] = {
-                    anomalies,
-                    patterns,
-                    statistics: this._calculateAnomalyStatistics(anomalies)
-                };
-            }
-
-            return {
-                deviceId,
-                timestamp: new Date(),
-                results
-            };
-
-        } catch (error) {
-            logger.error('Anomaly detection error:', error);
-            throw error;
-        }
-    }
-
-    async analyzeNetworkPatterns(deviceId, options = {}) {
-        try {
-            const patterns = {};
-            const metrics = await this._fetchAllMetrics(deviceId, options.timeRange);
-
-            // Analyze daily patterns
-            patterns.daily = this._analyzeDailyPatterns(metrics);
-
-            // Analyze weekly patterns
-            patterns.weekly = this._analyzeWeeklyPatterns(metrics);
-
-            // Analyze correlation between metrics
-            patterns.correlations = this._analyzeMetricCorrelations(metrics);
-
-            // Identify peak usage periods
-            patterns.peaks = this._identifyPeakPeriods(metrics);
-
-            return {
-                deviceId,
-                timestamp: new Date(),
-                patterns,
-                confidence: this._calculatePatternConfidence(patterns)
-            };
-
-        } catch (error) {
-            logger.error('Pattern analysis error:', error);
-            throw error;
-        }
-    }
-
-    async forecastResourceUtilization(deviceId, options = {}) {
-        try {
-            const resources = options.resources || ['cpu', 'memory', 'bandwidth'];
-            const horizon = options.horizon || this.forecastHorizon;
-            const forecasts = {};
-
-            for (const resource of resources) {
-                const data = await this._fetchMetricData(deviceId, resource, options.timeRange);
-                
-                // Generate resource-specific forecasts
-                forecasts[resource] = await this._generateResourceForecast(data, {
-                    horizon,
-                    confidence: options.confidence || 0.95
-                });
-            }
-
-            // Calculate combined utilization forecast
-            const combinedForecast = this._combineForecastsWithConstraints(forecasts);
-
-            return {
-                deviceId,
-                timestamp: new Date(),
-                forecasts,
-                combinedForecast,
-                recommendations: this._generateResourceRecommendations(combinedForecast)
-            };
-
-        } catch (error) {
-            logger.error('Resource forecasting error:', error);
-            throw error;
-        }
-    }
-
-    // Private helper methods
-    async _fetchMetricData(deviceId, metricType, timeRange) {
-        return NetworkMetrics.find({
-            deviceId,
-            [`metrics.${metricType}`]: { $exists: true },
-            'metrics.timestamp': {
-                $gte: timeRange.start,
-                $lte: timeRange.end
-            }
-        }).sort({ 'metrics.timestamp': 1 });
-    }
-
-    async _initializePredictionModel(deviceId, data) {
-        // Initialize exponential smoothing model
-        const model = new ExponentialSmoothing(data, {
-            seasonalPeriods: 24, // Daily seasonality
-            alpha: 0.2,
-            beta: 0.1,
-            gamma: 0.3
-        });
-
-        // Train model
-        await model.train();
+        const values = data.map(point => point[metric]);
+        const n = values.length;
         
-        this.models.set(deviceId, model);
+        // Calculate slope using linear regression
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        for (let i = 0; i < n; i++) {
+            sumX += i;
+            sumY += values[i];
+            sumXY += i * values[i];
+            sumX2 += i * i;
+        }
+
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const confidence = Math.abs(slope) / (Math.max(...values) - Math.min(...values));
+
+        let direction;
+        if (Math.abs(slope) < 0.1) {
+            direction = 'stable';
+        } else {
+            direction = slope > 0 ? 'up' : 'down';
+        }
+
+        return {
+            direction,
+            confidence: Math.min(confidence, 1)
+        };
     }
 
-    _detectStatisticalAnomalies(data, options) {
-        const { values, mean, stdDev } = this._calculateStatistics(data);
-        const anomalies = [];
+    async detectAnomalies(data, metric = 'value') {
+        if (!Array.isArray(data) || data.length === 0) {
+            return [];
+        }
 
+        const values = data.map(point => point[metric]);
+        const mean = values.reduce((a, b) => a + b) / values.length;
+        const stdDev = Math.sqrt(
+            values.reduce((sq, n) => sq + Math.pow(n - mean, 2), 0) / values.length
+        );
+
+        const anomalies = [];
         values.forEach((value, index) => {
-            const zscore = Math.abs((value - mean) / stdDev);
-            if (zscore > options.threshold) {
+            const zScore = Math.abs(value - mean) / stdDev;
+            if (zScore > this.anomalyThreshold) {
                 anomalies.push({
-                    timestamp: data[index].timestamp,
+                    index,
                     value,
-                    zscore,
-                    deviation: value - mean
+                    severity: zScore > this.anomalyThreshold * 1.5 ? 'critical' : 'warning',
+                    timestamp: data[index].timestamp,
+                    confidence: Math.min(zScore / (this.anomalyThreshold * 2), 1)
                 });
             }
         });
@@ -221,92 +71,104 @@ class PredictiveAnalytics {
         return anomalies;
     }
 
-    _calculateStatistics(data) {
-        const values = data.map(d => d.value);
-        const mean = values.reduce((a, b) => a + b, 0) / values.length;
-        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-        const stdDev = Math.sqrt(variance);
+    async generateForecast(data, metric = 'value', horizon = this.forecastHorizon) {
+        if (!Array.isArray(data) || data.length < this.minDataPoints) {
+            return [];
+        }
 
-        return { values, mean, stdDev, variance };
+        const values = data.map(point => point[metric]);
+        const lastTimestamp = new Date(data[data.length - 1].timestamp);
+
+        // Simple exponential smoothing
+        const alpha = 0.3;
+        let level = values[0];
+        const smoothed = values.map(val => {
+            level = alpha * val + (1 - alpha) * level;
+            return level;
+        });
+
+        // Calculate trend
+        const trend = (smoothed[smoothed.length - 1] - smoothed[0]) / smoothed.length;
+
+        // Generate forecast
+        const forecast = [];
+        for (let i = 1; i <= horizon; i++) {
+            const predictedValue = level + trend * i;
+            const timestamp = new Date(lastTimestamp);
+            timestamp.setHours(timestamp.getHours() + i);
+
+            forecast.push({
+                timestamp,
+                value: predictedValue,
+                confidence: {
+                    lower: predictedValue * 0.9,
+                    upper: predictedValue * 1.1
+                }
+            });
+        }
+
+        return {
+            forecast,
+            metric,
+            confidence: Math.min(1 / Math.log(data.length), 1)
+        };
     }
 
-    _analyzeAnomalyPatterns(anomalies) {
-        // Group anomalies by time patterns
-        const patterns = {
-            hourly: new Map(),
-            daily: new Map(),
-            weekly: new Map()
+    async processMetrics(metrics) {
+        if (!metrics || !metrics.deviceId || !metrics.metrics) {
+            throw new Error('Invalid metrics data');
+        }
+
+        const result = {
+            deviceId: metrics.deviceId,
+            timestamp: new Date(),
+            trends: {},
+            predictions: [],
+            anomalies: []
         };
 
-        anomalies.forEach(anomaly => {
-            const date = new Date(anomaly.timestamp);
-            patterns.hourly.set(date.getHours(), (patterns.hourly.get(date.getHours()) || 0) + 1);
-            patterns.daily.set(date.getDay(), (patterns.daily.get(date.getDay()) || 0) + 1);
-            patterns.weekly.set(Math.floor(date.getDate() / 7), (patterns.weekly.get(Math.floor(date.getDate() / 7)) || 0) + 1);
-        });
+        // Process each metric type
+        const metricTypes = ['bandwidth', 'latency', 'packetLoss', 'jitter'];
+        for (const metric of metricTypes) {
+            if (metrics.metrics[metric]) {
+                // Analyze trends
+                const trend = await this.analyzeTrend([metrics], metric);
+                result.trends[metric] = trend;
 
-        return patterns;
-    }
+                // Detect anomalies
+                const anomalies = await this.detectAnomalies([metrics], metric);
+                result.anomalies.push(...anomalies);
 
-    async _generateResourceForecast(data, options) {
-        const model = new ExponentialSmoothing(data, {
-            seasonalPeriods: 24,
-            confidence: options.confidence
-        });
-
-        await model.train();
-        return model.forecast(options.horizon);
-    }
-
-    _combineForecastsWithConstraints(forecasts) {
-        // Implement resource constraints and dependencies
-        const combined = {};
-        const constraints = {
-            maxCpu: 100,
-            maxMemory: 100,
-            maxBandwidth: this._calculateMaxBandwidth(forecasts.bandwidth)
-        };
-
-        // Adjust forecasts based on constraints
-        Object.keys(forecasts).forEach(resource => {
-            combined[resource] = forecasts[resource].map(f => ({
-                ...f,
-                value: Math.min(f.value, constraints[`max${resource.charAt(0).toUpperCase() + resource.slice(1)}`])
-            }));
-        });
-
-        return combined;
-    }
-
-    _generateResourceRecommendations(forecast) {
-        const recommendations = [];
-
-        // Analyze resource utilization trends
-        Object.entries(forecast).forEach(([resource, predictions]) => {
-            const maxUtilization = Math.max(...predictions.map(p => p.value));
-            const avgUtilization = predictions.reduce((sum, p) => sum + p.value, 0) / predictions.length;
-
-            if (maxUtilization > 80) {
-                recommendations.push({
-                    resource,
-                    type: 'scaling',
-                    priority: 'high',
-                    message: `Consider scaling ${resource} capacity. Predicted max utilization: ${maxUtilization}%`
+                // Generate predictions
+                const forecast = await this.generateForecast([metrics], metric);
+                result.predictions.push({
+                    metric,
+                    forecast: forecast.forecast || [],
+                    confidence: forecast.confidence || 0
                 });
             }
+        }
 
-            if (avgUtilization < 20) {
-                recommendations.push({
-                    resource,
-                    type: 'optimization',
-                    priority: 'medium',
-                    message: `Consider optimizing ${resource} allocation. Average utilization: ${avgUtilization}%`
-                });
-            }
+        return result;
+    }
+
+    async analyzeMetrics(deviceId) {
+        if (!deviceId) {
+            throw new Error('Invalid device ID');
+        }
+
+        const metrics = await NetworkMetrics.find({ deviceId }).sort({ timestamp: -1 }).limit(100);
+        if (!metrics || metrics.length === 0) {
+            return { prediction: 'No data available for analysis' };
+        }
+
+        const result = await this.processMetrics({
+            deviceId,
+            metrics: metrics[0].metrics
         });
 
-        return recommendations;
+        return result;
     }
 }
 
-export default new PredictiveAnalytics();
+export default PredictiveAnalytics;

@@ -44,13 +44,28 @@ app.use('/api', routes);
 
 // Initialize WebSocket
 httpServer.on('listening', async () => {
-  await WebSocketService.initialize(httpServer);
+  await WebSocketService.initialize(httpServer).catch(error => {
+    logger.error('WebSocket service initialization error:', error);
+    logger.info('Server continuing without WebSocket functionality');
+  });
 });
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => logger.info('Connected to MongoDB'))
-  .catch((err) => logger.error('MongoDB connection error:', err));
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    logger.info('Connected to MongoDB');
+    // Start server
+    httpServer.listen(process.env.PORT || 5000, () => {
+      logger.info(`Server is running on port ${process.env.PORT || 5000}`);
+    });
+  })
+  .catch(error => {
+    logger.error('MongoDB connection error:', error);
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1);
+    }
+  });
 
 // Basic error handling
 app.use((err, req, res, next) => {
@@ -58,8 +73,24 @@ app.use((err, req, res, next) => {
   res.status(500).send('Something broke!');
 });
 
-const PORT = process.env.PORT || 5000;
+// Graceful shutdown
+const shutdown = async () => {
+  try {
+    logger.info('Shutting down server...');
+    await WebSocketService.cleanup();
+    await mongoose.disconnect();
+    httpServer.close(() => {
+      logger.info('Server shut down successfully');
+      process.exit(0);
+    });
+  } catch (error) {
+    logger.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
 
-httpServer.listen(PORT, () => {
-  logger.info(`Server is running on port ${PORT}`);
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+export { app };
+export default app;
